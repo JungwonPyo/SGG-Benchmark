@@ -280,12 +280,15 @@ class SGG_Model(object):
         
         for s, o, r, _ in rels:
             s,o,r = int(s), int(o), int(r)
-            if len(bboxes[0]) > 6:
-                subj = f"{bboxes[s][6]}_{bbox_labels[s]}"
-                obj = f"{bboxes[o][6]}_{bbox_labels[o]}"
-            else:
-                subj = bbox_labels[s]
-                obj = bbox_labels[o]
+            # if len(bboxes[0]) > 6:
+            #     subj = f"{bboxes[s][6]}_{bbox_labels[s]}"
+            #     obj = f"{bboxes[o][6]}_{bbox_labels[o]}"
+            # else:
+            #     subj = bbox_labels[s]
+            #     obj = bbox_labels[o]
+            
+            subj = bbox_labels[s]
+            obj = bbox_labels[o]
         
             #color = self.obj_class_colors[int(bboxes[s][5])]
 

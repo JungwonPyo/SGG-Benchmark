@@ -6,9 +6,17 @@ import copy
 
 
 class DatasetCatalog(object):
-    DATA_DIR = "/home/maelicneau/Documents/SGG-Benchmark/"
-    IMG_DIR = "/home/maelicneau/Documents/SGG-Benchmark/datasets/"
+    DATA_DIR = "/home/dxr/su_ws/src/scene_understanding/scene_understanding_pkg/SGG-Benchmark/"
+    IMG_DIR = "/home/dxr/su_ws/src/scene_understanding/scene_understanding_pkg/SGG-Benchmark/datasets/"
     DATASETS = {
+        "vg": {
+            "img_dir": DATA_DIR+"datasets/vg/VG_100K",
+            "roidb_file": DATA_DIR+"datasets/vg/VG-SGG-with-attri.h5",
+            "dict_file": DATA_DIR+"datasets/vg/VG-SGG-dicts-with-attri.json",
+            "image_file": DATA_DIR+"datasets/vg/image_data.json",
+            "zeroshot_file": DATA_DIR+"datasets/VG150/zeroshot_triplet.pytorch",
+            "informative_file": "", #DATA_DIR+"datasets/informative_sg.json",
+        },
         "VG150": {
             "img_dir": IMG_DIR+"VG_100K",
             "roidb_file": DATA_DIR+"datasets/VG150/VG-SGG-with-attri.h5",
@@ -64,7 +72,7 @@ class DatasetCatalog(object):
                 factory="COCODataset",
                 args=args,
             )
-        elif ("VG" in name) or ('GQA' in name):
+        elif ("vg" in name) or ("VG" in name) or ('GQA' in name):
             # name should be something like VG_stanford_filtered_train
             p = name.rfind("_")
             name, split = name[:p], name[p+1:]

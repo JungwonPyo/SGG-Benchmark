@@ -17,4 +17,12 @@ You can run the demo as follows:
 python webcam_demo.py --config YOUR_CONFIG_FILE_HERE.yml --weights YOUR_WEIGHTS_FILE.pth --tracking # only activate tracking if boxmot is installed
 ```
 
+```
+python demo/webcam_demo.py --config checkpoints/react_final/config.yml --weights checkpoints/react_final/best_model_epoch_9.pth --tracking
+```
+
+```
+python demo/webcam_demo.py --config checkpoints/react_PSG/config.yml --weights checkpoints/react_PSG/best_model_epoch_11.pth --tracking
+```
+
 You can also use the [SGDET_on_custom_images.ipynb](SGDET_on_custom_images.ipynb) notebook to visualize detections on images.

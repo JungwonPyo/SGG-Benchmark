@@ -147,6 +147,7 @@ _C.MODEL.YOLO.WEIGHTS = ""
 _C.MODEL.YOLO.SIZE = "yolov8l" # Can be nano, small, medium or large
 _C.MODEL.YOLO.IMG_SIZE = 640 # input image size
 _C.MODEL.YOLO.OUT_CHANNELS = [192,384,576] # dim for the last layer of the YOLOv8 head
+# _C.MODEL.YOLO.OUT_CHANNELS = [256,512,512]
 # for YOLOV8, 9, 10: [192,384,576]
 # for YOLOV11: [256,512,512]
 
