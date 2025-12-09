@@ -1,0 +1,2 @@
+# Tkinter Requirements for SGDET-Annotate COCO Relations Tool
+Pillow>=9.0.0

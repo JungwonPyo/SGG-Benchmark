@@ -1,0 +1,7 @@
+right of
+left of
+inside
+on top of
+above
+below
+holding

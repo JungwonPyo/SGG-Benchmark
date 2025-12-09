@@ -104,8 +104,8 @@ at::Tensor SigmoidFocalLoss_forward_cuda(
 		const int num_classes, 
 		const float gamma, 
 		const float alpha) {
-  AT_ASSERTM(logits.type().is_cuda(), "logits must be a CUDA tensor");
-  AT_ASSERTM(targets.type().is_cuda(), "targets must be a CUDA tensor");
+  AT_ASSERTM(logits.is_cuda(), "logits must be a CUDA tensor");
+  AT_ASSERTM(targets.is_cuda(), "targets must be a CUDA tensor");
   AT_ASSERTM(logits.dim() == 2, "logits should be NxClass");
 
   const int num_samples = logits.size(0);
@@ -123,7 +123,7 @@ at::Tensor SigmoidFocalLoss_forward_cuda(
     return losses;
   }
 
-  AT_DISPATCH_FLOATING_TYPES(logits.type(), "SigmoidFocalLoss_forward", [&] {
+  AT_DISPATCH_FLOATING_TYPES(logits.scalar_type(), "SigmoidFocalLoss_forward", [&] {
     SigmoidFocalLossForward<scalar_t><<<grid, block, 0, stream>>>(
          losses_size,
          logits.contiguous().data<scalar_t>(),
@@ -146,9 +146,9 @@ at::Tensor SigmoidFocalLoss_backward_cuda(
 		const int num_classes, 
 		const float gamma, 
 		const float alpha) {
-  AT_ASSERTM(logits.type().is_cuda(), "logits must be a CUDA tensor");
-  AT_ASSERTM(targets.type().is_cuda(), "targets must be a CUDA tensor");
-  AT_ASSERTM(d_losses.type().is_cuda(), "d_losses must be a CUDA tensor");
+  AT_ASSERTM(logits.is_cuda(), "logits must be a CUDA tensor");
+  AT_ASSERTM(targets.is_cuda(), "targets must be a CUDA tensor");
+  AT_ASSERTM(d_losses.is_cuda(), "d_losses must be a CUDA tensor");
 
   AT_ASSERTM(logits.dim() == 2, "logits should be NxClass");
 
@@ -167,7 +167,7 @@ at::Tensor SigmoidFocalLoss_backward_cuda(
     return d_logits;
   }
 
-  AT_DISPATCH_FLOATING_TYPES(logits.type(), "SigmoidFocalLoss_backward", [&] {
+  AT_DISPATCH_FLOATING_TYPES(logits.scalar_type(), "SigmoidFocalLoss_backward", [&] {
     SigmoidFocalLossBackward<scalar_t><<<grid, block, 0, stream>>>(
          d_logits_size,
          logits.contiguous().data<scalar_t>(),
