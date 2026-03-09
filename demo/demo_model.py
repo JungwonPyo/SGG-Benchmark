@@ -5,7 +5,7 @@ import time
 from sgg_benchmark.modeling.detector import build_detection_model
 from sgg_benchmark.utils.checkpoint import DetectronCheckpointer
 from sgg_benchmark.structures.image_list import to_image_list
-from sgg_benchmark.config import cfg
+from sgg_benchmark.config import load_config_from_file
 
 from sgg_benchmark.data.build import build_transforms
 from sgg_benchmark.utils.logger import setup_logger
@@ -14,23 +14,23 @@ from sgg_benchmark.data import get_dataset_statistics
 import cv2
 import seaborn as sns
 import os
-
+import colorsys
+import json
 import networkx as nx
 from networkx.drawing.nx_agraph import to_agraph
 
 class SGG_Model(object):
     def __init__(self, config, weights, dcs=100, tracking=False, rel_conf=0.1, box_conf=0.5, show_fps=True) -> None:
-        cfg.merge_from_file(config)
-        cfg.TEST.CUSTUM_EVAL = True
-        cfg.OUTPUT_DIR = os.path.dirname(config)
+        self.cfg = load_config_from_file(config)
+        self.cfg.test.custum_eval = True
+        self.cfg.output_dir = os.path.dirname(config)
 
         # to force SGDET mode /!\ careful though, if the model hasn't been trained in sgdet mode, this will break the code
-        cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL = False
-        cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX = False
+        self.cfg.model.roi_relation_head.use_gt_object_label = False
+        self.cfg.model.roi_relation_head.use_gt_box = False
 
-        cfg.MODEL.ROI_HEADS.DETECTIONS_PER_IMG = dcs
-        # cfg.MODEL.BACKBONE.NMS_THRESH = 0.267
-        self.cfg = cfg
+        self.cfg.model.roi_heads.detections_per_img = dcs
+        # self.cfg.model.backbone.nms_thresh = 0.267
         self.show_fps = show_fps
 
         # for visu
@@ -40,6 +40,8 @@ class SGG_Model(object):
         self.text_padding = 2  # Padding around the text
 
         self.stats = get_dataset_statistics(self.cfg)
+        # Do NOT pop __background__: model labels are 1-indexed (0=background),
+        # so obj_classes[label] is correct as-is.
 
         self.obj_class_colors = sns.color_palette('Paired', len(self.stats['obj_classes'])+2)
         # to cv2 format
@@ -84,26 +86,27 @@ class SGG_Model(object):
 
     def load_model(self):
         self.model = build_detection_model(self.cfg)
-        self.model.to(self.cfg.MODEL.DEVICE)
+        self.model.to(self.cfg.model.device)
 
         self.checkpointer = DetectronCheckpointer(self.cfg, self.model)
         # last_check = self.checkpointer.get_checkpoint_file()
         # if last_check == "":
-        #     last_check = self.cfg.MODEL.WEIGHT
+        #     last_check = self.cfg.model.weight
         ckpt = self.checkpointer.load(self.model_weights)
-        self.device = torch.device(self.cfg.MODEL.DEVICE)
+        self.device = torch.device(self.cfg.model.device)
 
-        if self.cfg.MODEL.BACKBONE.TYPE == "yolov8world":
+        if self.cfg.model.backbone.type == "yolov8world":
             names = self.stats['obj_classes'].values()
             self.model.backbone.load_txt_feats(names)
 
-    def predict(self, image, visu_type='image'):
+    def predict(self, image, visu_type='image', return_attention=False):
         self.model.roi_heads.eval()
         self.model.backbone.eval()
 
         out_img = image.copy()
         self.last_time = time.time()
         img_list, _ = self._pre_processing(image)
+        img_list.image_sizes = [(image.shape[0], image.shape[1])]
         img_list = img_list.to(self.device)
         targets = None
         pre_process_time =(time.time()-self.last_time)*1000
@@ -111,20 +114,20 @@ class SGG_Model(object):
         
         with torch.no_grad():
             t_start = time.time()
-            predictions = self.model(img_list, targets)
+            predictions = self.model(img_list, targets, return_attention=return_attention)
             det_time = time.time()-t_start # in second
             det_time *= 1000 # in milisecond
             self.detec_time_bench.append(det_time)
         
+        if return_attention:
+            return predictions[0]
+
         t_start2 = time.time()
-        bboxes, rels = self._post_process2(predictions[0], orig_size=image.shape[:2], rel_threshold=self.rel_conf)
+        bboxes, rels = self._post_process2(predictions[0], orig_size=image.shape[:2], box_thres=self.box_conf, rel_threshold=self.rel_conf)
         bboxes = bboxes.cpu().numpy()
         rels = rels.cpu().numpy()
         post_process_time = time.time()
-        
-        print("Objects detected: ", len(bboxes))
-        print("Relationships detected: ", len(rels))
-
+    
         # update tracker
         if self.tracking and len(bboxes) > 0:
             # check if there is bbox to track
@@ -182,12 +185,10 @@ class SGG_Model(object):
             post_process_time *= 1000
             self.post_time_bench.append(post_process_time)
 
-            cv2.putText(out_img, f"Pre process: {pre_process_time:.2f}ms", positions["pre_process"], cv2.FONT_HERSHEY_COMPLEX, font_scale, (0, 0, 255), 2)
+            # cv2.putText(out_img, f"Pre process: {pre_process_time:.2f}ms", positions["pre_process"], cv2.FONT_HERSHEY_COMPLEX, font_scale, (0, 0, 255), 2)
 
-            cv2.putText(out_img, f"Post process: {post_process_time:.2f}ms", positions["post_process"], cv2.FONT_HERSHEY_COMPLEX, font_scale, (0, 0, 255), 2)
+            # cv2.putText(out_img, f"Post process: {post_process_time:.2f}ms", positions["post_process"], cv2.FONT_HERSHEY_COMPLEX, font_scale, (0, 0, 255), 2)
 
-            # Convert the image to RGB
-            out_img = cv2.cvtColor(out_img, cv2.COLOR_BGR2RGB)
             return out_img, None
         
         elif visu_type == 'image':
@@ -200,6 +201,7 @@ class SGG_Model(object):
     
     def draw_boxes_image(self, bboxes, out_img):
         bbox_labels = [self.stats['obj_classes'][int(b[5])] for b in bboxes]
+        print(bbox_labels)
 
         for i, bbox in enumerate(bboxes):
             bbox = [int(b) for b in bbox[:4]]
@@ -227,88 +229,117 @@ class SGG_Model(object):
             # Draw text
             cv2.putText(out_img, text, (bbox[0] + text_padding, bbox[1] - text_padding ), font, font_scale, (255, 255, 255), font_thickness)
         
-        return cv2.cvtColor(out_img, cv2.COLOR_BGR2RGB)
+        return out_img
     
-    def draw_bbox(self, img, bbox, label):
+    def get_color(self, idx):
+        """Generate a deterministic color for a class index."""
+        # Use golden ratio to space out hues
+        h = (idx * 0.618033988749895) % 1.0
+        r, g, b = colorsys.hsv_to_rgb(h, 0.7, 0.9)
+        return (int(b * 255), int(g * 255), int(r * 255))
+
+    def draw_bbox(self, img, bbox, label, cls_id):
         # Convert bbox to integer
-        bbox = [int(b) for b in bbox]
+        left, top, right, bottom = [int(b) for b in bbox]
+        color = self.get_color(cls_id)
 
-        color = self.obj_class_colors[self.stats['obj_classes'].index(label)]
+        # Nicer box: thicker corners
+        cv2.rectangle(img, (left, top), (right, bottom), color, 1)
+        length = min(15, int((right - left) * 0.2), int((bottom - top) * 0.2))
+        # Top-left corner
+        cv2.line(img, (left, top), (left + length, top), color, 3)
+        cv2.line(img, (left, top), (left, top + length), color, 3)
+        # Top-right corner
+        cv2.line(img, (right, top), (right - length, top), color, 3)
+        cv2.line(img, (right, top), (right, top + length), color, 3)
+        # Bottom-left corner
+        cv2.line(img, (left, bottom), (left + length, bottom), color, 3)
+        cv2.line(img, (left, bottom), (left, bottom - length), color, 3)
+        # Bottom-right corner
+        cv2.line(img, (right, bottom), (right - length, bottom), color, 3)
+        cv2.line(img, (right, bottom), (right, bottom - length), color, 3)
 
-        # Draw bounding box
-        cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
-
-        # Determine the text to be drawn
-        text = f"{label}"
-
-        # Calculate text size (width, height) and baseline
-        (text_width, text_height), baseline = cv2.getTextSize(text, self.font, self.font_scale, self.font_thickness)
-
-        # Calculate rectangle coordinates such that the rectangle is inside the box, top left
-        rect_start = (bbox[0], bbox[1] - text_height - 2 * self.text_padding)
-        rect_end = (bbox[0] + text_width + 2 * self.text_padding, bbox[1])
-        # if negative, move the rectangle to the left
-        if rect_start[0] < 0:
-            rect_start = (0, rect_start[1])
-            rect_end = (text_width + 2 * self.text_padding, rect_end[1])
-        if rect_end[0] > img.shape[1]:
-            rect_start = (img.shape[1] - text_width - 2 * self.text_padding, rect_start[1])
-            rect_end = (img.shape[1], rect_end[1])
-        if rect_start[1] < 0:
-            rect_start = (rect_start[0], 0)
-            rect_end = (rect_end[0], text_height + 2 * self.text_padding)
-        if rect_end[1] > img.shape[0]:
-            rect_start = (rect_start[0], img.shape[0] - text_height - 2 * self.text_padding)
-            rect_end = (rect_end[0], img.shape[0])
-
-        # Draw background rectangle
-        cv2.rectangle(img, rect_start, rect_end, color, cv2.FILLED)
-
-        # Draw text
-        cv2.putText(img, text, (rect_start[0] + self.text_padding, rect_end[1] - self.text_padding), self.font, self.font_scale, (255, 255, 255), self.font_thickness)
+        # Draw label background at top-left
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+        
+        y_text = top - th - 5
+        if y_text < 0:
+            y_text = top + th + 5
+            cv2.rectangle(img, (left, top), (left + tw + 4, top + th + 5), color, -1)
+            cv2.putText(img, label, (left + 2, top + th + 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+        else:
+            cv2.rectangle(img, (left, top - th - 5), (left + tw + 4, top), color, -1)
+            cv2.putText(img, label, (left + 2, top - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
 
         # Return coordinates of the center of the bbox
-        return (bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2
+        return (left + right) // 2, (top + bottom) // 2
 
     def draw_full_graph(self, img, bboxes, rels):
-        # Convert bboxes and rels to CPU and then to NumPy arrays
-        # bboxes is of type [x1, y1, x2, y2, score, class, id]
-        
-        # Precompute class labels
+        # bboxes is [N, 6+] : x1, y1, x2, y2, score, label, (id)
+        if bboxes is None or len(bboxes) == 0:
+            return img
+
+        # Precompute class labels and centers
         bbox_labels = [self.stats['obj_classes'][int(b[5])] for b in bboxes]
-        color = self.obj_class_colors[-1]
-        
-        for s, o, r, _ in rels:
-            s,o,r = int(s), int(o), int(r)
-            if len(bboxes[0]) > 6:
-                subj = f"{bboxes[s][6]}_{bbox_labels[s]}"
-                obj = f"{bboxes[o][6]}_{bbox_labels[o]}"
-            else:
-                subj = bbox_labels[s]
-                obj = bbox_labels[o]
-        
-            #color = self.obj_class_colors[int(bboxes[s][5])]
-
-            c_sub = self.draw_bbox(img, bboxes[s][:4], subj)
-            c_obj = self.draw_bbox(img, bboxes[o][:4], obj)
-        
-            # Draw the relation between center of sub c_sub and center of obj c_obj
-            cv2.line(img, c_sub, c_obj, color, 2)
-        
-            r_label = self.stats['rel_classes'][r]
-            font_scale = 0.5
-
-            # get text size
-            (text_width, text_height), baseline = cv2.getTextSize(r_label, cv2.FONT_HERSHEY_COMPLEX, font_scale, 1)
-            # Draw background
-            rect_start = ((c_sub[0] + c_obj[0]) // 2-2, ((c_sub[1] + c_obj[1]) // 2) - text_height - 2 * self.text_padding)
-            rect_end = ((c_sub[0] + c_obj[0]) // 2 + text_width + 2 * self.text_padding, (c_sub[1] + c_obj[1]) // 2)
-
-            # draw a rectange with rounded corners
-            self.draw_rounded_rectangle(img, rect_start, rect_end, color, cv2.FILLED, 5)
+        centers = []
+        for i, bbox in enumerate(bboxes):
+            label_text = bbox_labels[i]
+            if len(bbox) > 6:
+                label_text = f"{int(bbox[6])}_{label_text}"
             
-            # Draw the relation label
-            cv2.putText(img, r_label, ((c_sub[0] + c_obj[0]) // 2, (c_sub[1] + c_obj[1]) // 2 - 5), cv2.FONT_HERSHEY_COMPLEX | cv2.FONT_ITALIC, font_scale, (255, 255, 255), 1)
+            c = self.draw_bbox(img, bbox[:4], label_text, int(bbox[5]))
+            centers.append(c)
+        
+        # Collect valid relations
+        # Sort by rel_score (index 4) if available (output of ONNX export is [s, o, l, triplet, rel_score])
+        if rels is None or (hasattr(rels, '__len__') and len(rels) == 0) or (hasattr(rels, 'ndim') and rels.ndim < 2):
+            rels_to_draw = []
+        elif rels.shape[1] >= 5:
+            rels_list = rels.tolist()
+            rels_list.sort(key=lambda x: x[3], reverse=True) # Sort by triplet score
+            rels_to_draw = rels_list[:12]
+        else:
+            rels_to_draw = rels.tolist()
+
+        for rel in rels_to_draw:
+            s, o, r = int(rel[0]), int(rel[1]), int(rel[2])
+            
+            p1 = centers[s]
+            p2 = centers[o]
+            
+            # Color and glow
+            rel_color = (255, 255, 255) # White line
+            glow_color = (255, 128, 0) # Orange glow
+            
+            # Draw directional arrow from Subject to Object
+            dist = np.sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)
+            if dist > 40:
+                alpha = 20.0 / (dist + 1e-6)
+                p1_short = (int(p1[0] * (1-alpha) + p2[0] * alpha), int(p1[1] * (1-alpha) + p2[1] * alpha))
+                p2_short = (int(p2[0] * (1-alpha) + p1[0] * alpha), int(p2[1] * (1-alpha) + p1[1] * alpha))
+                
+                # Draw glow line (thicker)
+                cv2.line(img, p1_short, p2_short, glow_color, 2, cv2.LINE_AA)
+                cv2.line(img, p1_short, p2_short, rel_color, 1, cv2.LINE_AA)
+                
+                # Sharp arrowhead
+                angle = np.arctan2(p1_short[1] - p2_short[1], p1_short[0] - p2_short[0])
+                tip_len = 8
+                tip1 = (int(p2_short[0] + tip_len * np.cos(angle + 0.5)), int(p2_short[1] + tip_len * np.sin(angle + 0.5)))
+                tip2 = (int(p2_short[0] + tip_len * np.cos(angle - 0.5)), int(p2_short[1] + tip_len * np.sin(angle - 0.5)))
+                
+                cv2.line(img, p2_short, tip1, rel_color, 1, cv2.LINE_AA)
+                cv2.line(img, p2_short, tip2, rel_color, 1, cv2.LINE_AA)
+            
+            # Relation label
+            r_label = self.stats['rel_classes'][r]
+            
+            # Draw label at 1/3 point from Subject toward Object
+            mid = (int(p1[0] * 0.65 + p2[0] * 0.35), int(p1[1] * 0.65 + p2[1] * 0.35))
+            
+            (tw, th), _ = cv2.getTextSize(r_label, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)
+            cv2.rectangle(img, (mid[0] - 2, mid[1] - th - 2), (mid[0] + tw + 2, mid[1] + 2), (20, 20, 20), -1)
+            cv2.putText(img, r_label, (mid[0], mid[1] - 1), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
 
         return img
     
@@ -369,23 +400,28 @@ class SGG_Model(object):
     def _pre_processing(self, image):
         # to cv2 format
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        # reshape to 480,640
-        image = cv2.resize(image, (640, 640))
 
         target = torch.LongTensor([-1])
         transform = build_transforms(self.cfg, is_train=False)
 
         image, target = transform(image, target)
         # image = image[None,:] # add batch dimension
-        image_list = to_image_list(image, self.cfg.DATALOADER.SIZE_DIVISIBILITY)
+        image_list = to_image_list(image, self.cfg.dataloader.size_divisibility)
 
         return image_list, target
     
-    def _post_process(self, boxlist, rel_threshold=0.1, box_thres=0.1, orig_size=(640,640)):
+    def _post_process(self, box_dict, rel_threshold=0.1, box_thres=0.1, orig_size=(640,640)):
         height, width = orig_size
-        boxlist = boxlist.resize((width, height))
+        
+        # Scaling boxes
+        old_width, old_height = box_dict['image_size']
+        scale_x = width / old_width
+        scale_y = height / old_height
+        
+        xyxy_bbox = box_dict['boxes'].clone()
+        xyxy_bbox[:, [0, 2]] *= scale_x
+        xyxy_bbox[:, [1, 3]] *= scale_y
 
-        xyxy_bbox = boxlist.bbox
         # current sgg info
         current_dict = {'bbox': [], 
                         'bbox_labels': [], 
@@ -397,15 +433,15 @@ class SGG_Model(object):
         }
         
         # sort boxes based on confidence
-        sortedid, id2sorted = self.get_sorted_bbox_mapping(boxlist.get_field('pred_scores').tolist())
+        sortedid, id2sorted = self.get_sorted_bbox_mapping(box_dict['pred_scores'].tolist())
         # filter by box thres
-        sortedid = [i for i in sortedid if boxlist.get_field('pred_scores')[i] > box_thres]
+        sortedid = [i for i in sortedid if box_dict['pred_scores'][i] > box_thres]
         id2sorted = {v: k for k, v in enumerate(sortedid)}
 
         for i in sortedid:
             current_dict['bbox'].append([int(round(b)) for b in xyxy_bbox[i].tolist()])
-            current_dict['bbox_labels'].append(boxlist.get_field('pred_labels')[i].item())
-            current_dict['bbox_scores'].append(boxlist.get_field('pred_scores')[i].item())
+            current_dict['bbox_labels'].append(box_dict['pred_labels'][i].item())
+            current_dict['bbox_scores'].append(box_dict['pred_scores'][i].item())
 
         current_dict['bbox_labels'] = [c for c in current_dict['bbox_labels']]
         
@@ -413,22 +449,22 @@ class SGG_Model(object):
         bboxes_tensor = torch.cat([torch.tensor(current_dict['bbox']), torch.tensor(current_dict['bbox_scores']).unsqueeze(1), torch.arange(len(current_dict['bbox_labels'])).unsqueeze(1)], dim=1)
 
         # sorted relationships
-        rel_sortedid, _ = self.get_sorted_bbox_mapping(boxlist.get_field('pred_rel_scores')[:,1:].max(1)[0].tolist())
+        rel_sortedid, _ = self.get_sorted_bbox_mapping(box_dict['pred_rel_scores'][:,1:].max(1)[0].tolist())
 
         # remove all relationships with score < rel_threshold
-        rel_sortedid = [i for i in rel_sortedid if boxlist.get_field('pred_rel_scores')[i][1:].max(0)[0] > rel_threshold]
+        rel_sortedid = [i for i in rel_sortedid if box_dict['pred_rel_scores'][i][1:].max(0)[0] > rel_threshold]
 
         # sorted rel
         for i in rel_sortedid:
-            old_pair = boxlist.get_field('rel_pair_idxs')[i].tolist()
+            old_pair = box_dict['rel_pair_idxs'][i].tolist()
             # don't add if the subject or object is not in the sortedid
             if old_pair[0] not in id2sorted or old_pair[1] not in id2sorted:
                 continue
             
-            current_dict['rel_labels'].append(boxlist.get_field('pred_rel_scores')[i][1:].max(0)[1].item() + 1)
-            rel_s = boxlist.get_field('pred_rel_scores')[i][1:].max(0)[0].item()
+            current_dict['rel_labels'].append(box_dict['pred_rel_scores'][i][1:].max(0)[1].item() + 1)
+            rel_s = box_dict['pred_rel_scores'][i][1:].max(0)[0].item()
             # rel score is sub_score * obj_score * rel_score
-            rel_s = rel_s * boxlist.get_field('pred_scores')[old_pair[0]].item() * boxlist.get_field('pred_scores')[old_pair[1]].item()
+            rel_s = rel_s * box_dict['pred_scores'][old_pair[0]].item() * box_dict['pred_scores'][old_pair[1]].item()
             current_dict['rel_scores'].append(rel_s)
             current_dict['rel_pairs'].append([id2sorted[old_pair[0]], id2sorted[old_pair[1]]])
         current_dict['bbox_labels'] = [self.stats['obj_classes'][i] for i in current_dict['bbox_labels']]
@@ -444,60 +480,86 @@ class SGG_Model(object):
         id2sorted = [item[1] for item in sorted([(j,i) for i, j in enumerate(sorted2id)])]
         return sorted2id, id2sorted
     
-    def _post_process2(self, boxlist, rel_threshold=0.1, box_thres=0.1, orig_size=(640,640)):
+    def _post_process2(self, box_dict, rel_threshold=0.1, box_thres=0.1, orig_size=(640,640)):
         height, width = orig_size
-        boxlist = boxlist.resize((width, height))
-        
-        xyxy_bbox = boxlist.bbox
 
-        rel_scores = boxlist.get_field('pred_rel_scores')
-        pairs = boxlist.get_field('rel_pair_idxs')
-        rel_labels = boxlist.get_field('pred_rel_labels')
-        
-        # Remove the background and get the max scores
-        rel_scores = rel_scores[:, 1:].max(dim=1)[0]
+        # Scaling boxes
+        old_width, old_height = box_dict['image_size']
+        scale_x = width / old_width
+        scale_y = height / old_height
 
-        # rel_score = rel_score * subj_score * obj_score
-        rel_scores = rel_scores * boxlist.get_field('pred_scores')[pairs[:, 0]] * boxlist.get_field('pred_scores')[pairs[:, 1]]
-        
-        # Stack the pairs, labels, and rel_scores
-        filtered_rels = torch.cat((pairs.int(), rel_labels.unsqueeze(1).int(), rel_scores.unsqueeze(1)), dim=1)
+        xyxy_bbox = box_dict['boxes'].clone()
+        xyxy_bbox[:, [0, 2]] *= scale_x
+        xyxy_bbox[:, [1, 3]] *= scale_y
 
-        filtered_rels = filtered_rels[filtered_rels[:, 3] > rel_threshold]
-        
-        if filtered_rels.size(0) == 0:
+        bbox_scores = box_dict['pred_scores']
+        bbox_labels = box_dict['pred_labels']
+
+        # Filter boxes by score — independently of whether they appear in any relation.
+        # This ensures boxes are always shown even when no relation survives.
+        filtered_bbox_ids = torch.where(bbox_scores > box_thres)[0]
+
+        if filtered_bbox_ids.numel() == 0:
             return torch.tensor([]), torch.tensor([])
-        
-        # Get unique values in the filtered_rels[:, :2]
-        unique_values = torch.unique(filtered_rels[:, :2].reshape(-1))
-        
-        # Get corresponding boxes and scores
-        bboxes = xyxy_bbox[unique_values.long()].int()
-        scores = boxlist.get_field('pred_scores')[unique_values.long()]
-        labels = boxlist.get_field('pred_labels')[unique_values.long()].int()
-        
-        # Combine boxes, scores, and labels into a single tensor
-        bboxes_tensor = torch.cat([bboxes, scores.unsqueeze(1), labels.unsqueeze(1)], dim=1)
-        
-        # Modify the subj, obj to match the new indexes
-        subj_indices = torch.searchsorted(unique_values, filtered_rels[:, 0])
-        obj_indices = torch.searchsorted(unique_values, filtered_rels[:, 1])
-        filtered_rels[:, 0] = subj_indices
-        filtered_rels[:, 1] = obj_indices
 
-        return bboxes_tensor, filtered_rels
+        # Build output boxes: [x1, y1, x2, y2, score, label]
+        bboxes_tensor = torch.cat([
+            xyxy_bbox[filtered_bbox_ids].int().float(),
+            bbox_scores[filtered_bbox_ids].unsqueeze(1),
+            bbox_labels[filtered_bbox_ids].unsqueeze(1).float(),
+        ], dim=1)
+
+        # --- Relations ---
+        rel_scores_full = box_dict['pred_rel_scores']  # (#rel, #rel_class) softmax
+        pairs = box_dict['rel_pair_idxs']              # (#rel, 2)
+        rel_labels = box_dict['pred_rel_labels']       # (#rel,)
+
+        if pairs.shape[0] == 0:
+            return bboxes_tensor, torch.tensor([])
+
+        # Geometric mean: (rel × subj × obj)^(1/3) — keeps the score on the same [0,1] scale
+        # as each individual component, so rel_conf=0.1 is a meaningful threshold.
+        # Raw product would give e.g. 0.3^3 = 0.027, forcing users to use rel_conf=0.001.
+        fg_rel_scores = rel_scores_full[:, 1:].max(dim=1)[0]
+        triplet_scores = (fg_rel_scores * bbox_scores[pairs[:, 0]] * bbox_scores[pairs[:, 1]]) ** (1.0 / 3.0)
+
+        # Stack: [subj_idx, obj_idx, rel_label, triplet_score]
+        all_rels = torch.cat([
+            pairs.int(),
+            rel_labels.unsqueeze(1).int(),
+            triplet_scores.unsqueeze(1),
+        ], dim=1)
+
+        # Only keep rels where both endpoints survived box_thres
+        fids = filtered_bbox_ids.unsqueeze(0)           # (1, N)
+        subj_ok = (all_rels[:, 0].unsqueeze(1) == fids).any(dim=1)
+        obj_ok  = (all_rels[:, 1].unsqueeze(1) == fids).any(dim=1)
+        all_rels = all_rels[subj_ok & obj_ok]
+
+        # Filter by triplet threshold
+        all_rels = all_rels[all_rels[:, 3] > rel_threshold]
+
+        if all_rels.size(0) == 0:
+            return bboxes_tensor, torch.tensor([])
+
+        # Remap subj/obj indices from original-box space to filtered-box space
+        max_orig_idx = int(filtered_bbox_ids.max().item()) + 1
+        idx_map = torch.full((max_orig_idx,), -1, dtype=torch.long, device=filtered_bbox_ids.device)
+        idx_map[filtered_bbox_ids] = torch.arange(len(filtered_bbox_ids), device=filtered_bbox_ids.device)
+
+        all_rels[:, 0] = idx_map[all_rels[:, 0].long()]
+        all_rels[:, 1] = idx_map[all_rels[:, 1].long()]
+
+        return bboxes_tensor, all_rels
     
-    def post_process_rels(self, boxlist):
-        rel_scores = boxlist.get_field('pred_rel_scores')
-        pairs = boxlist.get_field('rel_pair_idxs')
-        labels = boxlist.get_field('pred_rel_labels')
+    def post_process_rels(self, box_dict):
+        rel_scores = box_dict['pred_rel_scores']
+        pairs = box_dict['rel_pair_idxs']
+        labels = box_dict['pred_rel_labels']
         
         # Remove the background and get the max scores
         rel_scores = rel_scores[:, 1:].max(dim=1)[0]
 
-        # rel_score = rel_score * subj_score * obj_score
-        # rel_scores = rel_scores * boxlist.get_field('pred_scores')[pairs[:, 0]] * boxlist.get_field('pred_scores')[pairs[:, 1]]
-        
         # Stack the pairs, labels, and rel_scores
         all_rels = torch.cat((pairs.int(), labels.unsqueeze(1).int(), rel_scores.unsqueeze(1)), dim=1)
         

@@ -11,7 +11,7 @@ else:
     import xml.etree.ElementTree as ET
 
 
-from sgg_benchmark.structures.bounding_box import BoxList
+from sgg_benchmark.structures.box_ops import box_clip, filter_instances
 
 
 class PascalVOCDataset(torch.utils.data.Dataset):
@@ -64,7 +64,9 @@ class PascalVOCDataset(torch.utils.data.Dataset):
         img = Image.open(self._imgpath % img_id).convert("RGB")
 
         target = self.get_groundtruth(index)
-        target = target.clip_to_image(remove_empty=True)
+        target["boxes"] = box_clip(target["boxes"], target["image_size"])
+        keep = (target["boxes"][:, 2] > target["boxes"][:, 0]) & (target["boxes"][:, 3] > target["boxes"][:, 1])
+        target = filter_instances(target, keep)
 
         if self.transforms is not None:
             img, target = self.transforms(img, target)
@@ -80,9 +82,13 @@ class PascalVOCDataset(torch.utils.data.Dataset):
         anno = self._preprocess_annotation(anno)
 
         height, width = anno["im_info"]
-        target = BoxList(anno["boxes"], (width, height), mode="xyxy")
-        target.add_field("labels", anno["labels"])
-        target.add_field("difficult", anno["difficult"])
+        target = {
+            "boxes": anno["boxes"],
+            "image_size": (width, height),
+            "mode": "xyxy",
+            "labels": anno["labels"],
+            "difficult": anno["difficult"]
+        }
         return target
 
     def _preprocess_annotation(self, target):

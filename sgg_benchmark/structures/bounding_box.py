@@ -225,6 +225,14 @@ class BoxList(object):
         return bbox
 
     def __getitem__(self, item):
+        if isinstance(item, str):
+            if item == "boxes":
+                return self.bbox
+            if item == "image_size":
+                return self.size
+            if item == "mode":
+                return self.mode
+            return self.get_field(item)
         bbox = BoxList(self.bbox[item], self.size, self.mode)
         for k, v in self.extra_fields.items():
             if k in self.triplet_extra_fields:
@@ -232,6 +240,9 @@ class BoxList(object):
             else:
                 bbox.add_field(k, v[item])
         return bbox
+
+    def __contains__(self, item):
+        return item in ["boxes", "image_size", "mode"] or self.has_field(item)
 
     def __len__(self):
         return self.bbox.shape[0]

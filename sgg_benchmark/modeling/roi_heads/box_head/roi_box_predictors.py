@@ -34,11 +34,11 @@ class FastRCNNPredictor(nn.Module):
 class FPNPredictor(nn.Module):
     def __init__(self, cfg, in_channels):
         super(FPNPredictor, self).__init__()
-        num_classes = cfg.MODEL.ROI_BOX_HEAD.NUM_CLASSES
+        num_classes = cfg.model.roi_box_head.num_classes
         representation_size = in_channels
 
         self.cls_score = nn.Linear(representation_size, num_classes)
-        num_bbox_reg_classes = 2 if cfg.MODEL.CLS_AGNOSTIC_BBOX_REG else num_classes
+        num_bbox_reg_classes = 2 if cfg.model.cls_agnostic_bbox_reg else num_classes
         self.bbox_pred = nn.Linear(representation_size, num_bbox_reg_classes * 4)
 
         nn.init.normal_(self.cls_score.weight, std=0.01)
@@ -57,5 +57,5 @@ class FPNPredictor(nn.Module):
 
 
 def make_roi_box_predictor(cfg, in_channels):
-    func = registry.ROI_BOX_PREDICTOR[cfg.MODEL.ROI_BOX_HEAD.PREDICTOR]
+    func = registry.ROI_BOX_PREDICTOR[cfg.model.roi_box_head.predictor]
     return func(cfg, in_channels)

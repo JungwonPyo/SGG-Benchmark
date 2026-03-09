@@ -1,36 +1,97 @@
 import torch
 from ultralytics.nn.tasks import DetectionModel
-from sgg_benchmark.modeling.backbone.utils import non_max_suppression
 
-from ultralytics.nn.tasks import attempt_load_one_weight
-from ultralytics.utils import ops
+from ultralytics.nn.tasks import load_checkpoint
+from ultralytics.utils import nms, ops
 from ultralytics.utils.plotting import feature_visualization
 from pathlib import Path
-
-from sgg_benchmark.structures.bounding_box import BoxList
+from omegaconf import DictConfig
+from ultralytics.nn.modules.head import Detect as _Detect
 
 class YoloModel(DetectionModel):
-    def __init__(self, cfg, ch=3, nc=None, verbose=True):  # model, input channels, number of classes
-        yolo_cfg = cfg.MODEL.YOLO.SIZE + '.yaml'
-        if cfg.VERBOSE in ["DEBUG", "INFO"]:
+    def __init__(self, cfg: DictConfig, ch: int = 3, nc: int | None = None, verbose: bool = True):  # model, input channels, number of classes
+        yolo_cfg = cfg.model.yolo.size + '.yaml'
+        if getattr(cfg, 'VERBOSE', None) in ["DEBUG", "INFO"]:
             verbose = True
         else:
             verbose = False
-        super().__init__(yolo_cfg, nc=nc, verbose=verbose)
-        # self.features_layers = [len(self.model) - 2]
-        self.conf_thres = cfg.MODEL.BACKBONE.NMS_THRESH
-        self.iou_thres = cfg.MODEL.ROI_HEADS.NMS
-        self.device = cfg.MODEL.DEVICE
-        self.input_size = cfg.INPUT.MIN_SIZE_TRAIN
-        self.nc = nc
-        self.max_det = cfg.MODEL.ROI_HEADS.DETECTIONS_PER_IMG
+        super().__init__(yolo_cfg, nc=nc, verbose=True)
 
-        if self.end2end or '11' in yolo_cfg:
+        # monkey patch for end2end, should be fixed in future versions of ultralytics
+        def _patched_postprocess(self_detect, preds):
+            boxes, scores = preds.split([4, self_detect.nc], dim=-1)
+            scores, conf, idx = self_detect.get_topk_index(scores, self_detect.max_det)
+            boxes = boxes.gather(dim=1, index=idx.repeat(1, 1, 4))
+            # idx: [B, max_det, 1] — original flat anchor index in [0, N_anchors)
+            return torch.cat([boxes, scores, conf, idx.float()], dim=-1)  # [B, max_det, 7]
+
+        # Apply only to the detection head instance
+        head = self.model[-1]  # last module is always the Detect head
+        if isinstance(head, _Detect) and head.end2end:
+            import types
+            head.postprocess = types.MethodType(_patched_postprocess, head)
+
+        # self.features_layers = [len(self.model) - 2]
+        self.conf_thres = cfg.model.backbone.nms_thresh
+        self.iou_thres = cfg.model.roi_heads.nms
+        self.device = cfg.model.device
+        self.input_size = cfg.input.img_size  # (W, H)
+        self.input_w = int(self.input_size[0])
+        self.input_h = int(self.input_size[1])
+        self.nc = nc
+        self.max_det = cfg.model.roi_heads.detections_per_img
+
+        if self.end2end or '11' in yolo_cfg or '26' in yolo_cfg:
             self.layers_to_extract = [16, 19, 22]
         elif '12' in yolo_cfg:
-            self.layers_to_extract = [14, 17, 20]
+            self.layers_to_extract = [14, 17, 20] #[14, 17, 20] # [3,5,8]
         else:
-            self.layers_to_extract = [15, 18, 21]
+            self.layers_to_extract = [15, 18, 21] #[15, 18, 21] # [4,6,9]
+        
+        # Freeze backbone: full, partial (freeze_at), or none
+        freeze    = cfg.model.backbone.freeze
+        freeze_at = getattr(cfg.model.backbone, 'freeze_at', -1) if not freeze else -1
+        self._freeze_backbone(freeze, freeze_at)
+    
+    def _freeze_backbone(self, freeze: bool, freeze_at: int = -1):
+        """Configure backbone parameter gradients.
+
+        Three modes
+        -----------
+        freeze=True                   : freeze every parameter (full freeze, no grad).
+        freeze=False, freeze_at >= 0  : freeze layers [0, freeze_at) by setting
+                                        requires_grad=False; layers freeze_at.. are
+                                        fully trainable (requires_grad=True).
+                                        The whole model stays in eval() so that the
+                                        YOLO detection head always outputs decoded
+                                        (NMS-compatible) predictions.  Gradients
+                                        still propagate through unfrozen layers via
+                                        autograd --- eval/train mode only controls
+                                        BN/dropout, not whether gradients flow.
+        freeze=False, freeze_at < 0   : fine-tune the entire backbone.
+        """
+        if freeze:
+            for param in self.parameters():
+                param.requires_grad = False
+            self.eval()
+            print("YOLO Backbone FROZEN - no gradients will be computed")
+        elif freeze_at >= 0:
+            for i, m in enumerate(self.model):
+                for param in m.parameters():
+                    param.requires_grad = (i >= freeze_at)
+            # eval() is required so the detection head returns decoded predictions
+            # that postprocess/NMS can consume.  Gradients still flow through
+            # layers with requires_grad=True.
+            self.eval()
+            n_frozen = freeze_at
+            n_train  = len(self.model) - freeze_at
+            print(f"YOLO Backbone PARTIALLY FROZEN — "
+                  f"{n_frozen} layers frozen (0-{freeze_at-1}), "
+                  f"{n_train} layers trainable ({freeze_at}+)")
+        else:
+            for param in self.parameters():
+                param.requires_grad = True
+            print("YOLO Backbone WILL BE FINE-TUNED - gradients will be computed")
 
     # custom implementation of forward method based on
     # https://github.com/ultralytics/ultralytics/blob/3df9d278dce67eec7fdb4fddc0aab22fee62588f/ultralytics/nn/tasks.py#L122
@@ -54,6 +115,7 @@ class YoloModel(DetectionModel):
             if embed:
                 if i in self.layers_to_extract:  # if current layer is one of the feature extraction layers
                     feature_maps.append(x)
+                    
         if embed:
             return x, feature_maps
         else:
@@ -68,7 +130,7 @@ class YoloModel(DetectionModel):
             task (str | None): model task
         """
 
-        weights, _ = attempt_load_one_weight(weights_path)
+        weights, _ = load_checkpoint(weights_path)
 
         if weights:
             super().load(weights)
@@ -77,54 +139,119 @@ class YoloModel(DetectionModel):
         """Post-processes predictions and returns a list of Results objects."""
 
         if self.end2end:
-            preds = preds[0]
+            preds = preds[0]               # [B, max_det, 7]
             mask = preds[..., 4] > self.conf_thres
-            preds = [p[mask[idx]] for idx, p in enumerate(preds)]
-            # sort by confidence
-            preds = [p[p[:, 4].argsort(descending=True)] for p in preds]
-            preds = [p[:self.max_det] for p in preds]
+            preds  = [p[mask[i]] for i, p in enumerate(preds)]
+            # sort & cap
+            preds  = [p[p[:, 4].argsort(descending=True)][:self.max_det] for p in preds]
+            # column 6 is the real flat anchor index
+            indices = [p[:, 6].long() for p in preds]
+            preds   = [p[:, :6] for p in preds]   # drop feat_idx from box tensor
         else:
-            preds, indices = non_max_suppression(
+            preds, indices = nms.non_max_suppression(
                 preds,
                 nc=self.nc,
                 conf_thres=self.conf_thres,
                 iou_thres=self.iou_thres,
                 max_det=self.max_det,
+                return_idxs=True,
             )
 
         results = []
         for i, (pred, idx) in enumerate(zip(preds, indices)):
-            if len(pred) == 0:
-                # return a dummy box with size of all image
-                boxes = torch.tensor([[0, 0, image_sizes[0][1], image_sizes[0][0]]], device=self.device)
-                scores = torch.tensor([0.0], device=self.device)
-                labels = torch.tensor([0], device=self.device)
-                boxlist = BoxList(boxes, out_img_size, mode="xyxy")
-                boxlist.add_field("pred_labels", labels)
-                boxlist.add_field("pred_scores", scores)
-                boxlist.add_field("labels", labels)
-                boxlist.add_field("feat_idx", torch.tensor([0], device=self.device))
-                results.append(boxlist)
+            # Get the image size for this image (H, W)
+            orig_size = image_sizes[i]
+            orig_h = float(orig_size[0])
+            orig_w = float(orig_size[1])
+            
+            if pred.shape[0] == 0:
+                # return an empty instance
+                instance = {
+                    "boxes": torch.zeros((0, 4), device=self.device).float(),
+                    # lb_boxes: boxes in letterbox pixel coords (640×640 input space).
+                    # All feature maps are computed on the letterboxed image, so any
+                    # geometry-based lookup into P3/P4/P5 must use lb_boxes, not boxes.
+                    "lb_boxes": torch.zeros((0, 4), device=self.device).float(),
+                    "lb_input_size": self.input_h,
+                    "lb_gain": 1.0,
+                    "lb_pad_w": 0.0,
+                    "lb_pad_h": 0.0,
+                    "image_size": (int(orig_w), int(orig_h)),
+                    "mode": "xyxy",
+                    "pred_labels": torch.zeros((0,), device=self.device).long(),
+                    "pred_scores": torch.zeros((0,), device=self.device).float(),
+                    "labels": torch.zeros((0,), device=self.device).long(),
+                    "feat_idx": torch.zeros((0,), device=self.device).long()
+                }
+                results.append(instance)
                 continue
 
-            # flip
-            out_img_size = image_sizes[i]
-
             boxes = pred[:, :4]
-            boxes = ops.scale_boxes((self.input_size, self.input_size), boxes, (out_img_size[1], out_img_size[0]))
+            # If we are exporting to ONNX, we return boxes in the input space [0, imgsz]
+            # to allow the deployment script to handle letterbox reversal dynamically.
+            # Otherwise, we scale to original image size for standard training/eval.
+            if not torch.onnx.is_in_onnx_export():
+                gain = min(self.input_h / orig_h, self.input_w / orig_w)
+                
+                # Offsets for letterbox
+                pad_w = (self.input_w - orig_w * gain) / 2
+                pad_h = (self.input_h - orig_h * gain) / 2
+                
+                offset_w = torch.round(torch.as_tensor(pad_w - 0.1, device=boxes.device))
+                offset_h = torch.round(torch.as_tensor(pad_h - 0.1, device=boxes.device))
 
-            boxlist = BoxList(boxes, out_img_size, mode="xyxy")
+                # Save letterbox-space boxes BEFORE reversing the transform.
+                # Feature maps P3/P4/P5 are always in this 640×640 letterbox space,
+                # so any geometry-based lookup (union box center, bilinear sampling)
+                # must use lb_boxes, not the original-image boxes below.
+                lb_boxes = boxes.clamp(min=0)
+
+                # Scale and shift boxes to original image space
+                # and avoid inplace operations which can be tricky for ONNX (if it were used)
+                b0 = (boxes[:, 0] - offset_w) / gain
+                b1 = (boxes[:, 1] - offset_h) / gain
+                b2 = (boxes[:, 2] - offset_w) / gain
+                b3 = (boxes[:, 3] - offset_h) / gain
+                
+                # Clip boxes
+                b0 = b0.clamp(0, orig_w)
+                b1 = b1.clamp(0, orig_h)
+                b2 = b2.clamp(0, orig_w)
+                b3 = b3.clamp(0, orig_h)
+                
+                boxes = torch.stack([b0, b1, b2, b3], dim=1)
+            else:
+                # ONNX export: boxes are already in letterbox space
+                gain, pad_w, pad_h = 1.0, 0.0, 0.0
+                offset_w = offset_h = torch.zeros(1, device=boxes.device)
+                lb_boxes = boxes.clamp(min=0)
 
             scores = pred[:, 4]
             labels = pred[:, 5].long()
-            boxlist.add_field("pred_labels", labels.detach().clone())
+            
             # add 1 to all labels to account for background class
-            labels += 1
-            boxlist.add_field("pred_scores", scores)
-            boxlist.add_field("labels", labels)
-            boxlist.add_field("feat_idx", idx.long())
+            labels_plus_1 = labels + 1
 
-            results.append(boxlist)
+            instance = {
+                "boxes": boxes,
+                # Letterbox-space boxes (640×640 pixel coords, same space as feature maps).
+                # Use lb_boxes for all feature-map lookups (union box center, bilinear sampling,
+                # box positional encoding).  Use boxes for GT IoU matching and visualization
+                # on the original-resolution image.
+                "lb_boxes": lb_boxes,
+                "lb_input_size": self.input_h,
+                "lb_gain": float(gain),
+                "lb_pad_w": float(offset_w.item() if hasattr(offset_w, 'item') else offset_w),
+                "lb_pad_h": float(offset_h.item() if hasattr(offset_h, 'item') else offset_h),
+                "image_size": (int(orig_w), int(orig_h)),
+                "mode": "xyxy",
+                "pred_labels": labels_plus_1.detach().clone(),
+                "pred_scores": scores,
+                "labels": labels_plus_1,
+                "feat_idx": idx.long()
+            }
+
+            results.append(instance)
         return results
 
     @staticmethod

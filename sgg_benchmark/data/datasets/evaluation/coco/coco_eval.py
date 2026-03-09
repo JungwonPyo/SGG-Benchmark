@@ -1,4 +1,3 @@
-import logging
 import tempfile
 import os
 import torch
@@ -6,8 +5,7 @@ from collections import OrderedDict
 from tqdm import tqdm
 
 from sgg_benchmark.modeling.roi_heads.mask_head.inference import Masker
-from sgg_benchmark.structures.bounding_box import BoxList
-from sgg_benchmark.structures.boxlist_ops import boxlist_iou
+from sgg_benchmark.structures.box_ops import box_iou as boxlist_iou, box_resize, box_convert, filter_instances
 
 
 def do_coco_evaluation(
@@ -68,18 +66,25 @@ def prepare_for_coco_detection(predictions, dataset):
     coco_results = []
     for image_id, prediction in enumerate(predictions):
         original_id = dataset.id_to_img_map[image_id]
-        if len(prediction) == 0:
+        
+        # Ensure prediction is a dict
+        if not isinstance(prediction, dict):
+            raise TypeError(f"Prediction at index {image_id} is not a dict, got {type(prediction)}")
+            
+        num_boxes = len(prediction["boxes"])
+        if num_boxes == 0:
             continue
 
         img_info = dataset.get_img_info(image_id)
         image_width = img_info["width"]
         image_height = img_info["height"]
-        prediction = prediction.resize((image_width, image_height))
-        prediction = prediction.convert("xywh")
-
-        boxes = prediction.bbox.tolist()
-        scores = prediction.get_field("scores").tolist()
-        labels = prediction.get_field("labels").tolist()
+        
+        orig_size = prediction.get("image_size", (image_width, image_height))
+        prediction = box_resize(prediction, orig_size, (image_width, image_height))
+        xywh_prediction = box_convert(prediction["boxes"], prediction.get("mode", "xyxy"), "xywh")
+        boxes = xywh_prediction.tolist()
+        scores = prediction.get("pred_scores", prediction.get("scores")).tolist()
+        labels = prediction.get("pred_labels", prediction.get("labels")).tolist()
 
         mapped_labels = [dataset.contiguous_category_id_to_json_id[i] for i in labels]
 
@@ -106,25 +111,27 @@ def prepare_for_coco_segmentation(predictions, dataset):
     coco_results = []
     for image_id, prediction in tqdm(enumerate(predictions)):
         original_id = dataset.id_to_img_map[image_id]
-        if len(prediction) == 0:
+        if not isinstance(prediction, dict) or len(prediction["boxes"]) == 0:
             continue
 
         img_info = dataset.get_img_info(image_id)
         image_width = img_info["width"]
         image_height = img_info["height"]
-        prediction = prediction.resize((image_width, image_height))
-        masks = prediction.get_field("mask")
+        
+        orig_size = prediction.get("image_size", (image_width, image_height))
+        prediction = box_resize(prediction, orig_size, (image_width, image_height))
+        masks = prediction["mask"]
         # t = time.time()
         # Masker is necessary only if masks haven't been already resized.
         if list(masks.shape[-2:]) != [image_height, image_width]:
-            masks = masker(masks.expand(1, -1, -1, -1, -1), prediction)
+            masks = masker(masks.expand(1, -1, -1, -1, -1), [prediction])
             masks = masks[0]
         # logger.info('Time mask: {}'.format(time.time() - t))
         # prediction = prediction.convert('xywh')
 
         # boxes = prediction.bbox.tolist()
-        scores = prediction.get_field("scores").tolist()
-        labels = prediction.get_field("labels").tolist()
+        scores = prediction.get("pred_scores", prediction.get("scores")).tolist()
+        labels = prediction.get("pred_labels", prediction.get("labels")).tolist()
 
         # rles = prediction.get_field('mask')
 
@@ -191,20 +198,23 @@ def evaluate_box_proposals(
         img_info = dataset.get_img_info(image_id)
         image_width = img_info["width"]
         image_height = img_info["height"]
-        prediction = prediction.resize((image_width, image_height))
-
+        
+        if not isinstance(prediction, dict):
+            raise TypeError(f"Prediction at index {image_id} is not a dict, got {type(prediction)}")
+            
+        orig_size = prediction.get("image_size", (image_width, image_height))
+        prediction = box_resize(prediction, orig_size, (image_width, image_height))
         # sort predictions in descending order
-        # TODO maybe remove this and make it explicit in the documentation
-        inds = prediction.get_field("objectness").sort(descending=True)[1]
-        prediction = prediction[inds]
+        scores = prediction.get("objectness", prediction.get("pred_scores"))
+        inds = scores.sort(descending=True)[1]
+        prediction = filter_instances(prediction, inds)
 
         ann_ids = dataset.coco.getAnnIds(imgIds=original_id)
         anno = dataset.coco.loadAnns(ann_ids)
         gt_boxes = [obj["bbox"] for obj in anno if obj["iscrowd"] == 0]
         gt_boxes = torch.as_tensor(gt_boxes).reshape(-1, 4)  # guard against no boxes
-        gt_boxes = BoxList(gt_boxes, (image_width, image_height), mode="xywh").convert(
-            "xyxy"
-        )
+        gt_boxes = box_convert(gt_boxes, "xywh", "xyxy")
+        
         gt_areas = torch.as_tensor([obj["area"] for obj in anno if obj["iscrowd"] == 0])
 
         if len(gt_boxes) == 0:
@@ -217,14 +227,15 @@ def evaluate_box_proposals(
 
         if len(gt_boxes) == 0:
             continue
-
-        if len(prediction) == 0:
+            
+        num_pred = len(prediction["boxes"])
+        if num_pred == 0:
             continue
 
-        if limit is not None and len(prediction) > limit:
-            prediction = prediction[:limit]
+        if limit is not None and num_pred > limit:
+            prediction = filter_instances(prediction, torch.arange(limit, device=prediction["boxes"].device))
 
-        overlaps = boxlist_iou(prediction, gt_boxes)
+        overlaps = boxlist_iou(prediction["boxes"], gt_boxes)
 
         _gt_overlaps = torch.zeros(len(gt_boxes))
         for j in range(min(len(prediction), len(gt_boxes))):

@@ -10,8 +10,7 @@ from tqdm import tqdm
 import random
 import cv2
 
-from sgg_benchmark.structures.bounding_box import BoxList
-from sgg_benchmark.structures.boxlist_ops import boxlist_iou
+from sgg_benchmark.structures.box_ops import box_iou
 
 try:
     from loguru import logger
@@ -61,8 +60,7 @@ class RelationDataset(torch.utils.data.Dataset):
         for cat in categories:
             self.id_to_classes[cat['id']] = cat['name']
             self.classes_to_id[cat['name']] = cat['id']
-        
-        # Add background class
+
         self.id_to_classes[0] = '__background__'
         self.classes_to_id['__background__'] = 0
         
@@ -71,16 +69,18 @@ class RelationDataset(torch.utils.data.Dataset):
 
         rel_categories = self.coco_data['rel_categories'] if 'rel_categories' in self.coco_data else []
 
-        # Create indexed mappings with background class at index 0
-        self.ind_to_predicates = {0: '__background__'}
+        # Build predicate mappings
+        self.id_to_predicates = {}
         for i, pred in enumerate(rel_categories):
-            # Extract name if pred is a dictionary, otherwise use pred directly
+            pred_id = pred['id'] if isinstance(pred, dict) and 'id' in pred else i + 1
             pred_name = pred['name'] if isinstance(pred, dict) and 'name' in pred else str(pred)
-            self.ind_to_predicates[i + 1] = pred_name
-            
-        print(f"RelationDataset: Total relation classes: {len(self.ind_to_predicates)}")
-        print(f"RelationDataset: Predicate mappings: {self.ind_to_predicates}")
+            self.id_to_predicates[pred_id] = pred_name
 
+        self.id_to_predicates[0] = '__background__'
+        
+        # Create indexed list (sorted by id for consistency)
+        self.ind_to_predicates = [self.id_to_predicates[i] for i in sorted(self.id_to_predicates.keys())]
+            
     def _process_coco_data(self, num_im, filter_empty_rels):
         """Process COCO data to extract boxes, classes, and relationships"""
         images = self.coco_data['images']
@@ -162,16 +162,18 @@ class RelationDataset(torch.utils.data.Dataset):
             for rel in img_relationships:
                 subj_id = rel['subject_id']
                 obj_id = rel['object_id']
-                predicate = rel['predicate_id'] + 1  # Add 1 to account for background class at index 0
                 
-                # Map to box indices
-                if subj_id in ann_id_to_idx and obj_id in ann_id_to_idx:
-                    subj_idx = ann_id_to_idx[subj_id]
-                    obj_idx = ann_id_to_idx[obj_id]
+                # Map predicate_id to our predicate index
+                pred_id = rel['predicate_id']
+                if pred_id in self.id_to_predicates:
+                    pred_name = self.id_to_predicates[pred_id]
+                    predicate_idx = self.ind_to_predicates.index(pred_name)
                     
-                    # Ensure predicate is within valid range
-                    if predicate < len(self.ind_to_predicates):
-                        relations.append([subj_idx, obj_idx, predicate])
+                    # Map to box indices
+                    if subj_id in ann_id_to_idx and obj_id in ann_id_to_idx:
+                        subj_idx = ann_id_to_idx[subj_id]
+                        obj_idx = ann_id_to_idx[obj_id]
+                        relations.append([subj_idx, obj_idx, predicate_idx])
             
             # Apply overlap filtering if needed
             if self.filter_non_overlap and len(relations) > 0:
@@ -180,8 +182,7 @@ class RelationDataset(torch.utils.data.Dataset):
                 
                 # Check overlaps
                 boxes_tensor = torch.from_numpy(boxes_array)
-                boxes_obj = BoxList(boxes_tensor, (img_data['width'], img_data['height']), 'xyxy')
-                inters = boxlist_iou(boxes_obj, boxes_obj)
+                inters = box_iou(boxes_tensor, boxes_tensor)
                 rel_overs = inters[relations_array[:, 0], relations_array[:, 1]]
                 inc = np.where(rel_overs > 0.0)[0]
                 
@@ -229,7 +230,7 @@ class RelationDataset(torch.utils.data.Dataset):
         if self.transforms is not None:
             img, target = self.transforms(img, target)
         
-        target.add_field("image_path", self.filenames[index], is_triplet=True)
+        target["image_path"] = self.filenames[index]
         
         return img, target, index
     
@@ -246,8 +247,12 @@ class RelationDataset(torch.utils.data.Dataset):
             box[:, 0] = new_xmin
             box[:, 2] = new_xmax
         
-        target = BoxList(box, (w, h), 'xyxy')
-        target.add_field("labels", torch.from_numpy(self.gt_classes[index]))
+        target = {
+            "boxes": box,
+            "image_size": (w, h),
+            "mode": "xyxy",
+            "labels": torch.from_numpy(self.gt_classes[index])
+        }
         
         relation = self.relationships[index].copy()
         if self.filter_duplicate_rels and len(relation) > 0:
@@ -259,7 +264,7 @@ class RelationDataset(torch.utils.data.Dataset):
             relation = np.array(relation, dtype=np.int32)
         
         # Add relation to target
-        num_box = len(target)
+        num_box = len(target["boxes"])
         relation_map = torch.zeros((num_box, num_box), dtype=torch.int64)
         for i in range(relation.shape[0]):
             if relation_map[int(relation[i, 0]), int(relation[i, 1])] > 0:
@@ -267,14 +272,17 @@ class RelationDataset(torch.utils.data.Dataset):
                     relation_map[int(relation[i, 0]), int(relation[i, 1])] = int(relation[i, 2])
             else:
                 relation_map[int(relation[i, 0]), int(relation[i, 1])] = int(relation[i, 2])
-        target.add_field("relation", relation_map, is_triplet=True)
+        target["relation"] = relation_map
         
+        from sgg_benchmark.structures.box_ops import box_clip, filter_instances
+        
+        target["boxes"] = box_clip(target["boxes"], target["image_size"])
         if evaluation:
-            target = target.clip_to_image(remove_empty=False)
-            target.add_field("relation_tuple", torch.LongTensor(relation))
-            target.add_field("image_path", self.filenames[index], is_triplet=False)
+            target["relation_tuple"] = torch.LongTensor(relation)
+            target["image_path"] = self.filenames[index]
         else:
-            target = target.clip_to_image(remove_empty=True)
+            keep = (target["boxes"][:, 2] > target["boxes"][:, 0]) & (target["boxes"][:, 3] > target["boxes"][:, 1])
+            target = filter_instances(target, keep)
         
         return target
     
@@ -311,7 +319,10 @@ class RelationDataset(torch.utils.data.Dataset):
         eps = 1e-3
         bg_matrix += 1
         fg_sum = fg_matrix.sum(2)[:, :, None]
-        pred_dist = np.log(np.where(fg_sum > 0, fg_matrix / fg_sum, 1e-10) + eps)
+        
+        # Use np.divide with where to avoid RuntimeWarning when fg_sum is 0
+        ratio = np.divide(fg_matrix, fg_sum, out=np.zeros_like(fg_matrix, dtype=float), where=fg_sum > 0)
+        pred_dist = np.log(np.where(fg_sum > 0, ratio, 1e-10) + eps)
         
         result = {
             'fg_matrix': torch.from_numpy(fg_matrix),
@@ -369,11 +380,14 @@ def get_relation_statistics(dataset, must_overlap=True):
     pred_freq = [stats_pred[i] / sum(stats_pred.values()) if sum(stats_pred.values()) > 0 else 0 for i in range(num_rel_classes)]
     
     # Weight is the inverse frequency normalized by the median
-    pred_weights = torch.tensor(np.sum(fg_matrix, axis=(0, 1)))
+    pred_weights = torch.tensor(np.sum(fg_matrix, axis=(0, 1))).float()
     pred_weights[0] = -1.0
     non_zero_weights = pred_weights[pred_weights > 0]
     if len(non_zero_weights) > 0:
-        pred_weights = (1./pred_weights) * torch.median(non_zero_weights)
+        # Use epsilon to avoid division by zero which produces Infs
+        pred_weights = (1. / (pred_weights + 1e-12)) * torch.median(non_zero_weights)
+        # Background remains -1.0 (or something invalid) which is handled later
+        pred_weights[pred_weights > 1e12] = 0.0 # Any class with 0 samples gets 0 weight
     
     # Add background value
     stats_pred[0] = len(bg_matrix.flatten())

@@ -1,15 +1,14 @@
 from sgg_benchmark.data import datasets
 
 from .coco import coco_evaluation
-from .voc import voc_evaluation
-from .vg import vg_evaluation
+from .sgg_eval import do_sgg_evaluation
 
 
 def evaluate(cfg, dataset, dataset_name, predictions, output_folder, logger, **kwargs):
     """evaluate dataset using different methods based on dataset type.
     Args:
         dataset: Dataset object
-        predictions(list[BoxList]): each item in the list represents the
+        predictions(list[Dict]): each item in the list represents the
             prediction results for one image.
         output_folder: output folder, to save evaluation files or results.
         **kwargs: other args.
@@ -21,10 +20,8 @@ def evaluate(cfg, dataset, dataset_name, predictions, output_folder, logger, **k
     )
     if isinstance(dataset, datasets.COCODataset):
         return coco_evaluation(**args)
-    elif isinstance(dataset, datasets.PascalVOCDataset):
-        return voc_evaluation(**args)
     elif isinstance(dataset, datasets.VGDataset) or isinstance(dataset, datasets.PSGDataset) or isinstance(dataset, datasets.RelationDataset):
-        return vg_evaluation(**args)
+        return do_sgg_evaluation(**args)
     else:
         dataset_name = dataset.__class__.__name__
         raise NotImplementedError("Unsupported dataset type {}.".format(dataset_name))

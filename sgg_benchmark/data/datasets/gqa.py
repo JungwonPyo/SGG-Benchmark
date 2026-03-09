@@ -10,15 +10,14 @@ from collections import defaultdict
 from tqdm import tqdm
 import random
 import pickle
-from sgg_benchmark.structures.bounding_box import BoxList
-from sgg_benchmark.structures.boxlist_ops import cat_boxlist, split_boxlist
+from sgg_benchmark.structures.box_ops import cat_instances, split_instances, box_clip, filter_instances
 from sgg_benchmark.data.datasets.visual_genome import get_VG_statistics, get_VG_statistics_wo_sample
 
 class GQADataset(torch.utils.data.Dataset):
 
     def __init__(self, cfg, split, img_dir, dict_file, train_file, test_file, transforms=None, 
                  filter_empty_rels=True, num_im=-1, num_val_im=5000,
-                 filter_duplicate_rels=True, filter_non_overlap=True, flip_aug=False, custom_eval=False, custom_path=''):
+                 filter_duplicate_rels=True, filter_non_overlap=True, flip_aug=False):
         """
         Torch dataset for VisualGenome
         Parameters:
@@ -76,18 +75,25 @@ class GQADataset(torch.utils.data.Dataset):
                   ' ', str(self.img_info[index]['height']), ' ', '=' * 20)
         target = self.get_groundtruth(index, False)
         fp_name = self.filenames[index].split('/')[-1]
-        targets_len = len(target)
-        target.add_field("fp_name", fp_name)
-        target.add_field("src_w", img.size[0])
-        target.add_field("src_h", img.size[1])
+        targets_len = len(target["boxes"])
+        target["fp_name"] = fp_name
+        target["src_w"] = img.size[0]
+        target["src_h"] = img.size[1]
         pre_compute_box = tgt_record = pre_comp_record = pre_comp_result = None
         if self.cfg.DATASETS.DIR_LOAD_PRECOMPUTE_DETECTION_BOX and (self.split == 'train'):
             pre_comp_result = torch.load(os.path.join(self.cfg.DATASETS.GQA_BBOX_DIR, fp_name))
         if pre_comp_result is not None:
             boxes_arr = torch.as_tensor(pre_comp_result['bbox']).reshape(-1, 4)
-            pre_compute_box = BoxList(boxes_arr, img.size, mode='xyxy')
-            tgt_record = target.remove_all_fields()
-            target = cat_boxlist([target, pre_compute_box])
+            pre_compute_box = {
+                "boxes": boxes_arr,
+                "image_size": img.size,
+                "mode": 'xyxy',
+            }
+            # Save and remove fields for later restoration
+            tgt_record = {k: v for k, v in target.items() if k not in ["boxes", "image_size", "mode"]}
+            target = {k: v for k, v in target.items() if k in ["boxes", "image_size", "mode"]}
+            
+            target = cat_instances([target, pre_compute_box])
             pre_comp_record = {
                 'pred_scores': pre_comp_result['pred_scores'],
                 'pred_labels': pre_comp_result['pred_labels'],
@@ -114,16 +120,18 @@ class GQADataset(torch.utils.data.Dataset):
 
     @staticmethod
     def split_target(all_boxes, targets_len, pre_compute_len, tgt_record, pre_comp_record):
-        resized_boxes = split_boxlist(all_boxes, (targets_len, targets_len + pre_compute_len))
+        resized_boxes = split_instances(all_boxes, (targets_len, targets_len + pre_compute_len))
         target = resized_boxes[0]
         pre_compute_box = resized_boxes[1]
-        target.add_all_fields(tgt_record[0], tgt_record[1])
-        pre_compute_box.add_field("pred_scores", pre_comp_record['pred_scores'])
-        pre_compute_box.add_field("pred_labels", pre_comp_record['pred_labels'])
-        pre_compute_box.add_field("predict_logits", pre_comp_record['predict_logits'])
-        pre_compute_box.add_field("labels", pre_comp_record['labels'])
-        target = (target, pre_compute_box)
-        return target
+        
+        # Restore fields
+        target.update(tgt_record)
+        
+        pre_compute_box["pred_scores"] = pre_comp_record['pred_scores']
+        pre_compute_box["pred_labels"] = pre_comp_record['pred_labels']
+        pre_compute_box["predict_logits"] = pre_comp_record['predict_logits']
+        pre_compute_box["labels"] = pre_comp_record['labels']
+        return (target, pre_compute_box)
 
     def get_img_info(self, index):
         return self.img_info[index]
@@ -168,10 +176,13 @@ class GQADataset(torch.utils.data.Dataset):
             new_xmax = w - box[:,0]
             box[:,0] = new_xmin
             box[:,2] = new_xmax
-        target = BoxList(box, (w, h), 'xyxy') # xyxy
-
-        tgt_labels = torch.from_numpy(self.gt_classes[index])
-        target.add_field("labels", tgt_labels.long())
+        
+        target = {
+            "boxes": box,
+            "image_size": (w, h),
+            "mode": "xyxy",
+            "labels": torch.from_numpy(self.gt_classes[index]).long()
+        }
 
         relation = self.relationships[index].copy()  # (num_rel, 3)
 
@@ -186,7 +197,7 @@ class GQADataset(torch.utils.data.Dataset):
             relation = np.array(relation, dtype=np.int32)
 
         # add relation to target
-        num_box = len(target)
+        num_box = len(target["boxes"])
         relation_map = torch.zeros((num_box, num_box), dtype=torch.int64)
         for i in range(relation.shape[0]):
             if relation_map[int(relation[i, 0]), int(relation[i, 1])] > 0:
@@ -194,15 +205,17 @@ class GQADataset(torch.utils.data.Dataset):
                     relation_map[int(relation[i, 0]), int(relation[i, 1])] = int(relation[i, 2])
             else:
                 relation_map[int(relation[i, 0]), int(relation[i, 1])] = int(relation[i, 2])
-        target.add_field("relation", relation_map, is_triplet=True)
-        target.add_field("image_index", index)
+        
+        target["relation"] = relation_map
+        target["image_index"] = index
 
+        target["boxes"] = box_clip(target["boxes"], target["image_size"])
         if evaluation:
-            target = target.clip_to_image(remove_empty=False)
-            target.add_field("relation_tuple", torch.LongTensor(relation))  # for evaluation
+            target["relation_tuple"] = torch.LongTensor(relation)  # for evaluation
             return target
         else:
-            target = target.clip_to_image(remove_empty=True)
+            keep = (target["boxes"][:, 2] > target["boxes"][:, 0]) & (target["boxes"][:, 3] > target["boxes"][:, 1])
+            target = filter_instances(target, keep)
             return target
 
     def __len__(self):

@@ -113,8 +113,8 @@ class SHA_Context(nn.Module):
         super().__init__()
         self.cfg = config
         # setting parameters
-        if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
-            self.mode = 'predcls' if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL else 'sgcls'
+        if self.cfg.model.roi_relation_head.use_gt_box:
+            self.mode = 'predcls' if self.cfg.model.roi_relation_head.use_gt_object_label else 'sgcls'
         else:
             self.mode = 'sgdet'
         self.obj_classes = obj_classes
@@ -123,16 +123,16 @@ class SHA_Context(nn.Module):
         self.num_rel_cls = len(rel_classes)
         self.in_channels = in_channels
         self.obj_dim = in_channels
-        self.embed_dim = self.cfg.MODEL.ROI_RELATION_HEAD.EMBED_DIM
-        self.hidden_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.nms_thresh = self.cfg.TEST.RELATION.LATER_NMS_PREDICTION_THRES
+        self.embed_dim = self.cfg.model.roi_relation_head.embed_dim
+        self.hidden_dim = self.cfg.model.roi_relation_head.context_hidden_dim
+        self.nms_thresh = self.cfg.test.relation.later_nms_prediction_thres
 
-        self.dropout_rate = self.cfg.MODEL.ROI_RELATION_HEAD.TRANSFORMER.DROPOUT_RATE
-        self.obj_layer = self.cfg.MODEL.ROI_RELATION_HEAD.TRANSFORMER.OBJ_LAYER
-        self.edge_layer = self.cfg.MODEL.ROI_RELATION_HEAD.TRANSFORMER.REL_LAYER
+        self.dropout_rate = self.cfg.model.roi_relation_head.transformer.dropout_rate
+        self.obj_layer = self.cfg.model.roi_relation_head.transformer.obj_layer
+        self.edge_layer = self.cfg.model.roi_relation_head.transformer.rel_layer
 
         # the following word embedding layer should be initalize by glove.6B before using
-        embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=self.embed_dim)
+        embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=self.embed_dim)
         self.obj_embed1 = nn.Embedding(self.num_obj_cls, self.embed_dim)
         self.obj_embed2 = nn.Embedding(self.num_obj_cls, self.embed_dim)
         with torch.no_grad():
@@ -155,26 +155,26 @@ class SHA_Context(nn.Module):
         self.context_obj = SHA_Encoder(config, self.obj_layer)
         self.context_edge = SHA_Encoder(config, self.edge_layer)
 
-        self.obj_decode = not (self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX or self.cfg.MODEL.BACKBONE.FREEZE)
+        self.obj_decode = not (self.cfg.model.roi_relation_head.use_gt_box or self.cfg.model.backbone.freeze)
 
-        self.use_text_features_only = self.cfg.MODEL.ROI_RELATION_HEAD.TEXTUAL_FEATURES_ONLY
-        self.use_visual_features_only = self.cfg.MODEL.ROI_RELATION_HEAD.VISUAL_FEATURES_ONLY
+        self.use_text_features_only = self.cfg.model.roi_relation_head.textual_features_only
+        self.use_visual_features_only = self.cfg.model.roi_relation_head.visual_features_only
 
     def forward(self, roi_features, proposals, rel_pair_idxs, logger=None):
         obj_labels = None
         if self.obj_decode: # backbone is completely frozen and we consider predictions as GT
-            obj_logits = cat([proposal.get_field("predict_logits") for proposal in proposals], dim=0).detach()
+            obj_logits = cat([proposal["predict_logits"] for proposal in proposals], dim=0).detach()
             obj_embed = F.softmax(obj_logits, dim=1) @ self.obj_embed1.weight
         else:
-            obj_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
+            obj_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
             obj_embed = self.obj_embed1(obj_labels.long())
 
         # bbox embedding will be used as input
-        assert proposals[0].mode == 'xyxy'
+        assert proposals[0]["mode"] == 'xyxy'
         pos_embed = self.bbox_embed(encode_box_info(proposals))
 
         # encode objects with transformer
-        num_objs = [len(p) for p in proposals]
+        num_objs = [len(p["boxes"]) for p in proposals]
         obj_pre_rep_vis = cat((roi_features, pos_embed), -1)
         obj_pre_rep_vis = self.lin_obj_visual(obj_pre_rep_vis)
         obj_pre_rep_txt = obj_embed
@@ -191,7 +191,7 @@ class SHA_Context(nn.Module):
             obj_dists = self.out_obj(obj_feats)
             use_decoder_nms = self.mode == 'sgdet' and not self.training
             if use_decoder_nms:
-                boxes_per_cls = [proposal.get_field('boxes_per_cls') for proposal in proposals]
+                boxes_per_cls = [proposal["boxes_per_cls"] for proposal in proposals]
                 obj_preds = nms_per_cls(obj_dists, boxes_per_cls, num_objs)
             else:
                 obj_preds = obj_dists[:, 1:].max(1)[1] + 1

@@ -27,12 +27,12 @@ class Transformer(nn.Module):
     def __init__(self, config=None, in_channels=256):
         super(Transformer, self).__init__()
 
-        patch_size = config.MODEL.ROI_RELATION_HEAD.VETOTRANSFORMER.PATCH_SIZE
-        t_input_dim = config.MODEL.ROI_RELATION_HEAD.VETOTRANSFORMER.T_INPUT_DIM
-        enc_layers = config.MODEL.ROI_RELATION_HEAD.VETOTRANSFORMER.ENC_LAYERS
-        nheads = config.MODEL.ROI_RELATION_HEAD.VETOTRANSFORMER.NHEADS
-        emb_dropout = config.MODEL.ROI_RELATION_HEAD.VETOTRANSFORMER.EMB_DROPOUT
-        t_dropout = config.MODEL.ROI_RELATION_HEAD.VETOTRANSFORMER.T_DROPOUT
+        patch_size = config.model.roi_relation_head.vetotransformer.patch_size
+        t_input_dim = config.model.roi_relation_head.vetotransformer.t_input_dim
+        enc_layers = config.model.roi_relation_head.vetotransformer.enc_layers
+        nheads = config.model.roi_relation_head.vetotransformer.nheads
+        emb_dropout = config.model.roi_relation_head.vetotransformer.emb_dropout
+        t_dropout = config.model.roi_relation_head.vetotransformer.t_dropout
 
         mlp_dim = t_input_dim * 2
         self.patch_embed = PatchEmbed(patch_size=patch_size,

@@ -3,25 +3,29 @@ from .hierarchical_loss import RelationHierarchicalLossComputation
 
 def make_roi_relation_loss_evaluator(cfg, pred_prop, pred_weight):
 
-    if "Hierarchical" in cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR:
+    if "Hierarchical" in cfg.model.roi_relation_head.predictor:
         loss_evaluator = RelationHierarchicalLossComputation(
-            cfg.MODEL.ATTRIBUTE_ON,
-            cfg.MODEL.ROI_ATTRIBUTE_HEAD.NUM_ATTRIBUTES,
-            cfg.MODEL.ROI_ATTRIBUTE_HEAD.MAX_ATTRIBUTES,
-            cfg.MODEL.ROI_ATTRIBUTE_HEAD.ATTRIBUTE_BGFG_SAMPLE,
-            cfg.MODEL.ROI_ATTRIBUTE_HEAD.ATTRIBUTE_BGFG_RATIO,
-            cfg.MODEL.ROI_RELATION_HEAD.LABEL_SMOOTHING_LOSS,
+            cfg.model.attribute_on,
+            cfg.model.roi_attribute_head.num_attributes,
+            cfg.model.roi_attribute_head.max_attributes,
+            cfg.model.roi_attribute_head.attribute_bgfg_sample,
+            cfg.model.roi_attribute_head.attribute_bgfg_ratio,
+            cfg.model.roi_relation_head.label_smoothing_loss,
             pred_prop,
         )
     else:
+        from sgg_benchmark.data import get_dataset_statistics
+        statistics = get_dataset_statistics(cfg, False)
         loss_evaluator = RelationLossComputation(
-            cfg.MODEL.ATTRIBUTE_ON,
-            cfg.MODEL.ROI_ATTRIBUTE_HEAD.NUM_ATTRIBUTES,
-            cfg.MODEL.ROI_ATTRIBUTE_HEAD.MAX_ATTRIBUTES,
-            cfg.MODEL.ROI_ATTRIBUTE_HEAD.ATTRIBUTE_BGFG_SAMPLE,
-            cfg.MODEL.ROI_ATTRIBUTE_HEAD.ATTRIBUTE_BGFG_RATIO,
-            cfg.MODEL.ROI_RELATION_HEAD.LOSS,
+            cfg,
+            cfg.model.attribute_on,
+            cfg.model.roi_attribute_head.num_attributes,
+            cfg.model.roi_attribute_head.max_attributes,
+            cfg.model.roi_attribute_head.attribute_bgfg_sample,
+            cfg.model.roi_attribute_head.attribute_bgfg_ratio,
+            cfg.model.roi_relation_head.loss,
             pred_weight,
+            statistics,
         )
 
     return loss_evaluator

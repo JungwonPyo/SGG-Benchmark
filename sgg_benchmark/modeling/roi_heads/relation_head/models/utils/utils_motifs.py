@@ -1,15 +1,7 @@
-import array
-import os
-import zipfile
-import six
 import torch
 import numpy as np
-from six.moves.urllib.request import urlretrieve
-from tqdm import tqdm
-import sys
 from sgg_benchmark.modeling.utils import cat
 
-import clip
 
 def normalize_sigmoid_logits(orig_logits):
     orig_logits = torch.sigmoid(orig_logits)
@@ -68,7 +60,7 @@ def sort_by_score(proposals, scores):
              Inverse permutation
              Lengths for the TxB packed sequence.
     """
-    num_rois = [len(b) for b in proposals]
+    num_rois = [len(b["boxes"]) for b in proposals]
     num_im = len(num_rois)
 
     scores = scores.split(num_rois, dim=0)
@@ -115,8 +107,8 @@ def get_dropout_mask(dropout_probability, tensor_shape, device):
     return dropout_mask
 
 def center_x(proposals):
-    assert proposals[0].mode == 'xyxy'
-    boxes = cat([p.bbox for p in proposals], dim=0)
+    assert proposals[0]["mode"] == 'xyxy'
+    boxes = cat([p["boxes"] for p in proposals], dim=0)
     c_x = 0.5 * (boxes[:, 0] + boxes[:, 2])
     return c_x.view(-1)
     
@@ -125,11 +117,11 @@ def encode_box_info(proposals):
     encode proposed box information (x1, y1, x2, y2) to 
     (cx/wid, cy/hei, w/wid, h/hei, x1/wid, y1/hei, x2/wid, y2/hei, wh/wid*hei)
     """
-    assert proposals[0].mode == 'xyxy'
+    assert proposals[0]["mode"] == 'xyxy'
     boxes_info = []
     for proposal in proposals:
-        boxes = proposal.bbox
-        img_size = proposal.size
+        boxes = proposal["boxes"]
+        img_size = proposal["image_size"]
         wid = img_size[0]
         hei = img_size[1]
         wh = boxes[:, 2:] - boxes[:, :2] + 1.0

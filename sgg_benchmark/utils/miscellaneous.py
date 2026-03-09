@@ -3,15 +3,30 @@ import errno
 import json
 import logging
 import os
+from typing import List, Any
 from .comm import is_main_process
 import numpy as np
 import torch
 
-from sgg_benchmark.structures.bounding_box import BoxList
-from sgg_benchmark.structures.boxlist_ops import boxlist_iou
+from sgg_benchmark.structures.box_ops import box_iou
 import sgg_benchmark
 
-def set_seed(seed):
+# Hydra/OmegaConf imports (for new config system)
+try:
+    from omegaconf import DictConfig, OmegaConf
+    HYDRA_AVAILABLE = True
+except ImportError:
+    HYDRA_AVAILABLE = False
+    DictConfig = Any  # Type hint fallback
+
+
+def set_seed(seed: int) -> None:
+    """
+    Set random seeds for reproducibility.
+    
+    Args:
+        seed: Random seed value
+    """
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
@@ -19,10 +34,18 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def get_path():
+
+def get_path() -> str:
+    """Get the root path of the project."""
     return os.path.dirname(sgg_benchmark.__file__).split('sgg_benchmark')[0]
 
-def mkdir(path):
+def mkdir(path: str) -> None:
+    """
+    Create directory if it doesn't exist.
+    
+    Args:
+        path: Directory path to create
+    """
     try:
         os.makedirs(path)
     except OSError as e:
@@ -30,7 +53,14 @@ def mkdir(path):
             raise
 
 
-def save_labels(dataset_list, output_dir):
+def save_labels(dataset_list: List, output_dir: str) -> None:
+    """
+    Save dataset label mappings to JSON file.
+    
+    Args:
+        dataset_list: List of datasets with categories
+        output_dir: Directory to save labels.json
+    """
     if is_main_process():
         try:
             from loguru import logger
@@ -41,9 +71,6 @@ def save_labels(dataset_list, output_dir):
         for dataset in dataset_list:
             if hasattr(dataset, 'categories'):
                 ids_to_labels.update(dataset.categories)
-            else:
-                logger.warning("Dataset [{}] has no categories attribute, labels.json file won't be created".format(
-                    dataset.__class__.__name__))
 
         if ids_to_labels:
             labels_file = os.path.join(output_dir, 'labels.json')
@@ -51,11 +78,31 @@ def save_labels(dataset_list, output_dir):
             with open(labels_file, 'w') as f:
                 json.dump(ids_to_labels, f, indent=2)
 
-
-def save_config(cfg, path):
-    if is_main_process():
-        with open(path, 'w') as f:
+def save_config(cfg: DictConfig, path: str) -> None:
+    """
+    Save configuration to YAML file.
+    
+    Supports both YACS (old) and Hydra/OmegaConf (new) configs.
+    
+    Args:
+        cfg: Configuration to save (YACS CfgNode or OmegaConf DictConfig)
+        path: File path to save config
+    """
+    if not is_main_process():
+        return
+    
+    with open(path, 'w') as f:
+        # Check if it's a Hydra/OmegaConf config
+        if HYDRA_AVAILABLE and isinstance(cfg, DictConfig):
+            # New way: OmegaConf YAML
+            OmegaConf.save(cfg, f)
+        elif hasattr(cfg, 'dump'):
+            # Old way: YACS dump()
             f.write(cfg.dump())
+        else:
+            # Fallback: try to convert to YAML
+            import yaml
+            yaml.dump(dict(cfg), f, default_flow_style=False)
 
 
 def intersect_2d(x1, x2):
@@ -91,7 +138,7 @@ def bbox_overlaps(boxes1, boxes2):
     Return:
         iou (m, n) [np.array]
     """
-    boxes1 = BoxList(boxes1, (0, 0), 'xyxy')
-    boxes2 = BoxList(boxes2, (0, 0), 'xyxy')
-    iou = boxlist_iou(boxes1, boxes2).cpu().numpy()
+    boxes1 = torch.as_tensor(boxes1, dtype=torch.float32)
+    boxes2 = torch.as_tensor(boxes2, dtype=torch.float32)
+    iou = box_iou(boxes1, boxes2).cpu().numpy()
     return iou

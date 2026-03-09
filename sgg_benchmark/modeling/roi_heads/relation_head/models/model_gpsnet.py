@@ -6,15 +6,16 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 from sgg_benchmark.modeling.make_layers import make_fc
-from sgg_benchmark.structures.boxlist_ops import squeeze_tensor
+from sgg_benchmark.structures.box_ops import squeeze_tensor
 from sgg_benchmark.modeling.utils import cat
 from sgg_benchmark.modeling.roi_heads.relation_head.models.utils.classifiers import build_classifier
 from sgg_benchmark.modeling.roi_heads.relation_head.models.utils.utils_motifs import to_onehot
 from sgg_benchmark.modeling.roi_heads.relation_head.models.utils.utils_relation import obj_prediction_nms
 from sgg_benchmark.modeling.roi_heads.relation_head.models.utils.pairwise_feats import PairwiseFeatureExtractor
 class GatingModel(nn.Module):
-    def __init__(self, entity_input_dim, union_input_dim, hidden_dim, filter_dim=32):
+    def __init__(self, cfg, entity_input_dim, union_input_dim, hidden_dim, filter_dim=32):
         super(GatingModel, self).__init__()
+        self.cfg = cfg
 
         self.entity_input_dim = entity_input_dim
         self.union_input_dim = union_input_dim
@@ -22,24 +23,24 @@ class GatingModel(nn.Module):
 
         self.ws = nn.Sequential(
             # nn.BatchNorm1d(self.entity_input_dim),
-            make_fc(self.entity_input_dim, self.hidden_dim, ),
+            make_fc(self.cfg, self.entity_input_dim, self.hidden_dim, ),
             nn.ReLU(),
         )
         self.wo = nn.Sequential(
             # nn.BatchNorm1d(self.entity_input_dim),
-            make_fc(self.entity_input_dim, self.hidden_dim, ),
+            make_fc(self.cfg, self.entity_input_dim, self.hidden_dim, ),
             nn.ReLU(),
         )
 
         self.wu = nn.Sequential(
             # nn.BatchNorm1d(self.union_input_dim),
-            make_fc(self.union_input_dim, self.hidden_dim, ),
+            make_fc(self.cfg, self.union_input_dim, self.hidden_dim, ),
             nn.ReLU(),
         )
 
         self.w = nn.Sequential(
             # nn.BatchNorm1d(self.hidden_dim),
-            make_fc(self.hidden_dim, filter_dim, ),
+            make_fc(self.cfg, self.hidden_dim, filter_dim, ),
             nn.ReLU(),
         )
 
@@ -193,15 +194,15 @@ class UpdateUnit(nn.Module):
 
 
 class GPSNetContext(nn.Module):
-    def __init__(self, config, obj_classes, rel_classes, in_channels, hidden_dim=512, num_iter=2, dropout=False, ):
+    def __init__(self, cfg, obj_classes, rel_classes, in_channels, hidden_dim=512, num_iter=2, dropout=False, ):
         super(GPSNetContext, self).__init__()
-        self.cfg = config
+        self.cfg = cfg
         self.filter_the_mp_instance = False
         self.relness_weighting_mp = False
 
         # mode
-        if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
-            if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
+        if self.cfg.model.roi_relation_head.use_gt_box:
+            if self.cfg.model.roi_relation_head.use_gt_object_label:
                 self.mode = "predcls"
             else:
                 self.mode = "sgcls"
@@ -211,9 +212,9 @@ class GPSNetContext(nn.Module):
         ########## constants ########
         self.hidden_dim = hidden_dim
         self.update_step = num_iter
-        self.pooling_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
-        self.num_rel_cls = self.cfg.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
-        self.num_obj_cls = self.cfg.MODEL.ROI_BOX_HEAD.NUM_CLASSES
+        self.pooling_dim = self.cfg.model.roi_relation_head.context_pooling_dim
+        self.num_rel_cls = self.cfg.model.roi_relation_head.num_classes
+        self.num_obj_cls = self.cfg.model.roi_box_head.num_classes
 
         if self.update_step < 1:
             print(
@@ -222,16 +223,16 @@ class GPSNetContext(nn.Module):
         self.pairwise_feature_extractor = PairwiseFeatureExtractor(self.cfg, in_channels)
 
         self.pairwise_obj_feat_updim_fc = nn.Sequential(
-            make_fc(self.pooling_dim, self.hidden_dim * 2),
+            make_fc(self.cfg, self.pooling_dim, self.hidden_dim * 2),
             nn.ReLU()
         )
 
         self.pairwise_rel_feat_finalize_fc = nn.Sequential(
-            make_fc(self.hidden_dim * 2, self.pooling_dim),
+            make_fc(self.cfg, self.hidden_dim * 2, self.pooling_dim),
             nn.ReLU(),
         )
 
-        self.obj2obj_gating_model = GatingModel(self.pooling_dim, self.pooling_dim, self.hidden_dim)
+        self.obj2obj_gating_model = GatingModel(self.cfg, self.pooling_dim, self.pooling_dim, self.hidden_dim)
         self.obj2obj_msg_gen = MessageGenerator(self.pooling_dim, self.hidden_dim)
 
         self.sub2pred_msp = MessagePassingUnit(self.hidden_dim, 64)
@@ -246,7 +247,7 @@ class GPSNetContext(nn.Module):
         self.rel_feat_update_inst_feat_downdim_fc = nn.Sequential(
             nn.BatchNorm1d(self.pooling_dim),
             nn.ReLU(),
-            make_fc(self.pooling_dim, self.hidden_dim * 2),
+            make_fc(self.cfg, self.pooling_dim, self.hidden_dim * 2),
         )
         self.rel_feat_update_unit = UpdateUnit(self.hidden_dim, self.pooling_dim,
                                                self.pooling_dim, dropout=False)
@@ -255,7 +256,7 @@ class GPSNetContext(nn.Module):
         self.inst_feat_down_dim_fcs = nn.ModuleList(
             [
                 nn.Sequential(
-                    make_fc(self.pooling_dim, self.hidden_dim),
+                    make_fc(self.cfg, self.pooling_dim, self.hidden_dim),
                     nn.ReLU()
                 ) for _ in range(self.update_step)
 
@@ -263,13 +264,13 @@ class GPSNetContext(nn.Module):
         )
 
         self.obj2obj_msg_fuse = nn.Sequential(
-            make_fc(self.hidden_dim, self.pooling_dim),
+            make_fc(self.cfg, self.hidden_dim, self.pooling_dim),
             nn.ReLU()
         )
 
-        self.obj_classifier = build_classifier(self.pooling_dim, self.num_obj_cls)
+        self.obj_classifier = build_classifier(self.cfg, self.pooling_dim, self.num_obj_cls)
         self.obj_classifier.reset_parameters()
-        self.obj_decode = not (self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX or self.cfg.MODEL.BACKBONE.FREEZE)
+        self.obj_decode = not (self.cfg.model.roi_relation_head.use_gt_box or self.cfg.model.backbone.freeze)
 
     def _pre_predciate_classification(self, relatedness_scores, proposals, rel_pair_inds,
                                       refine_iter, refine_rel_feats_each_iters):
@@ -466,7 +467,7 @@ class GPSNetContext(nn.Module):
                     valid_inst_idx_batch = []
                     size_require = []
                     for p in proposals:
-                        valid_inst_idx = p.get_field('pred_scores') >= score_thresh
+                        valid_inst_idx = p["pred_scores"] >= score_thresh
                         valid_inst_idx_batch.append(valid_inst_idx)
                         size_require.append(len(squeeze_tensor(torch.nonzero(valid_inst_idx))) > 3)
 
@@ -545,7 +546,7 @@ class GPSNetContext(nn.Module):
         if self.obj_decode:
             refined_obj_logits = self.obj_classifier(refined_inst_features)
             boxes_per_cls = cat(
-                [proposal.get_field("boxes_per_cls") for proposal in proposals], dim=0
+                [proposal["boxes_per_cls"] for proposal in proposals], dim=0
             )
             refined_obj_pred_labels = obj_prediction_nms(
                 boxes_per_cls, refined_obj_logits, nms_thresh=0.5
@@ -553,7 +554,7 @@ class GPSNetContext(nn.Module):
             obj_labels = refined_obj_pred_labels
         else:
             refined_obj_logits = refined_inst_features
-            obj_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
+            obj_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
             obj_labels = obj_labels.long()
 
         return refined_obj_logits, obj_labels, refined_rel_features, None

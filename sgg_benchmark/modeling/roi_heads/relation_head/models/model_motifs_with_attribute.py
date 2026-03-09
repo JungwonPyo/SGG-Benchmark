@@ -17,11 +17,11 @@ class AttributeDecoderRNN(nn.Module):
         self.obj_classes = obj_classes
         self.att_classes = att_classes
         self.embed_dim = embed_dim
-        self.max_num_attri = config.MODEL.ROI_ATTRIBUTE_HEAD.MAX_ATTRIBUTES
-        self.num_attri_cat = config.MODEL.ROI_ATTRIBUTE_HEAD.NUM_ATTRIBUTES
+        self.max_num_attri = config.model.roi_attribute_head.max_attributes
+        self.num_attri_cat = config.model.roi_attribute_head.num_attributes
 
-        obj_embed_vecs = obj_edge_vectors(['start'] + self.obj_classes,wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=embed_dim)
-        att_embed_vecs = obj_edge_vectors(self.att_classes,  wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=embed_dim)
+        obj_embed_vecs = obj_edge_vectors(['start'] + self.obj_classes,wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=embed_dim)
+        att_embed_vecs = obj_edge_vectors(self.att_classes,  wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=embed_dim)
         self.obj_embed = nn.Embedding(len(self.obj_classes)+1, embed_dim)
         self.att_embed = nn.Embedding(len(self.att_classes), embed_dim)
         with torch.no_grad():
@@ -190,12 +190,12 @@ class AttributeLSTMContext(nn.Module):
         self.rel_classes = rel_classes
         self.num_obj_classes = len(obj_classes)
         self.num_att_classes = len(att_classes)
-        self.max_num_attri = config.MODEL.ROI_ATTRIBUTE_HEAD.MAX_ATTRIBUTES
-        self.num_attri_cat = config.MODEL.ROI_ATTRIBUTE_HEAD.NUM_ATTRIBUTES
+        self.max_num_attri = config.model.roi_attribute_head.max_attributes
+        self.num_attri_cat = config.model.roi_attribute_head.num_attributes
 
         # mode
-        if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
-            if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
+        if self.cfg.model.roi_relation_head.use_gt_box:
+            if self.cfg.model.roi_relation_head.use_gt_object_label:
                 self.mode = 'predcls'
             else:
                 self.mode = 'sgcls'
@@ -203,9 +203,9 @@ class AttributeLSTMContext(nn.Module):
             self.mode = 'sgdet'
 
         # word embedding
-        self.embed_dim = self.cfg.MODEL.ROI_RELATION_HEAD.EMBED_DIM
-        obj_embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=self.embed_dim)
-        att_embed_vecs = obj_edge_vectors(self.att_classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=self.embed_dim)
+        self.embed_dim = self.cfg.model.roi_relation_head.embed_dim
+        obj_embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=self.embed_dim)
+        att_embed_vecs = obj_edge_vectors(self.att_classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=self.embed_dim)
         self.obj_embed1 = nn.Embedding(self.num_obj_classes, self.embed_dim)
         self.obj_embed2 = nn.Embedding(self.num_obj_classes, self.embed_dim)
         self.att_embed1 = nn.Embedding(self.num_att_classes, self.embed_dim)
@@ -224,10 +224,10 @@ class AttributeLSTMContext(nn.Module):
 
         # object & relation context
         self.obj_dim = in_channels
-        self.dropout_rate = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_DROPOUT_RATE
-        self.hidden_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.nl_obj = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_OBJ_LAYER
-        self.nl_edge = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_REL_LAYER
+        self.dropout_rate = self.cfg.model.roi_relation_head.context_dropout_rate
+        self.hidden_dim = self.cfg.model.roi_relation_head.context_hidden_dim
+        self.nl_obj = self.cfg.model.roi_relation_head.context_obj_layer
+        self.nl_edge = self.cfg.model.roi_relation_head.context_rel_layer
         assert self.nl_obj > 0 and self.nl_edge > 0
 
         # TODO Kaihua Tang
@@ -316,31 +316,31 @@ class AttributeLSTMContext(nn.Module):
 
     def forward(self, x, proposals, logger=None):
         # labels will be used in DecoderRNN during training (for nms)
-        if self.training or self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
-            obj_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
-            att_labels = cat([proposal.get_field("attributes") for proposal in proposals], dim=0)
+        if self.training or self.cfg.model.roi_relation_head.use_gt_box:
+            obj_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
+            att_labels = cat([proposal["attributes"] for proposal in proposals], dim=0)
         else:
             obj_labels = None
             att_labels = None
 
-        if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
+        if self.cfg.model.roi_relation_head.use_gt_object_label:
             obj_embed = self.obj_embed1(obj_labels)
             gt_att_labels = self.generate_attributes_target(att_labels)
             gt_att_labels = gt_att_labels / (gt_att_labels.sum(1).unsqueeze(-1) + 1e-12)
             att_embed = gt_att_labels @ self.att_embed1.weight
         else:
-            obj_logits = cat([proposal.get_field("predict_logits") for proposal in proposals], dim=0).detach()
-            att_logits = cat([proposal.get_field("attribute_logits") for proposal in proposals], dim=0).detach()
+            obj_logits = cat([proposal["predict_logits"] for proposal in proposals], dim=0).detach()
+            att_logits = cat([proposal["attribute_logits"] for proposal in proposals], dim=0).detach()
             obj_embed = F.softmax(obj_logits, dim=1) @ self.obj_embed1.weight
             att_embed = normalize_sigmoid_logits(att_logits) @ self.att_embed1.weight
         
-        assert proposals[0].mode == 'xyxy'
+        assert proposals[0]["mode"] == 'xyxy'
         pos_embed = self.pos_embed(encode_box_info(proposals))
         obj_pre_rep = cat((x, obj_embed, att_embed, pos_embed), -1)
 
         boxes_per_cls = None
         if self.mode == 'sgdet' and not self.training:
-            boxes_per_cls = cat([proposal.get_field('boxes_per_cls') for proposal in proposals], dim=0) # comes from post process of box_head
+            boxes_per_cls = cat([proposal["boxes_per_cls"] for proposal in proposals], dim=0) # comes from post process of box_head
 
         # object level contextual feature
         obj_dists, obj_preds, att_dists, obj_ctx, perm, inv_perm, ls_transposed = self.obj_ctx(obj_pre_rep, proposals, obj_labels, att_labels, boxes_per_cls)

@@ -59,7 +59,7 @@ class DecoderRNN(nn.Module):
         self.obj_classes = obj_classes
         self.embed_dim = embed_dim
 
-        obj_embed_vecs = obj_edge_vectors(['start'] + self.obj_classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=embed_dim)
+        obj_embed_vecs = obj_edge_vectors(['start'] + self.obj_classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=embed_dim)
         self.obj_embed = nn.Embedding(len(self.obj_classes)+1, embed_dim)
         with torch.no_grad():
             self.obj_embed.weight.copy_(obj_embed_vecs, non_blocking=True)
@@ -67,7 +67,7 @@ class DecoderRNN(nn.Module):
         self.hidden_size = hidden_dim
         self.inputs_dim = inputs_dim
         self.input_size = self.inputs_dim + self.embed_dim
-        self.nms_thresh = self.cfg.TEST.RELATION.LATER_NMS_PREDICTION_THRES
+        self.nms_thresh = self.cfg.test.relation.later_nms_prediction_thres
         self.rnn_drop=rnn_drop
 
         self.input_linearity = torch.nn.Linear(self.input_size, 6 * self.hidden_size, bias=True)
@@ -217,11 +217,11 @@ class LSTMContext_RNN(nn.Module):
         self.rel_classes = rel_classes
         self.num_obj_classes = len(obj_classes)
 
-        self.use_text_features_only = self.cfg.MODEL.ROI_RELATION_HEAD.TEXTUAL_FEATURES_ONLY
+        self.use_text_features_only = self.cfg.model.roi_relation_head.textual_features_only
 
         # mode
-        if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
-            if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
+        if self.cfg.model.roi_relation_head.use_gt_box:
+            if self.cfg.model.roi_relation_head.use_gt_object_label:
                 self.mode = 'predcls'
             else:
                 self.mode = 'sgcls'
@@ -229,8 +229,8 @@ class LSTMContext_RNN(nn.Module):
             self.mode = 'sgdet'
 
         # word embedding
-        self.embed_dim = self.cfg.MODEL.ROI_RELATION_HEAD.EMBED_DIM
-        obj_embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=self.embed_dim)
+        self.embed_dim = self.cfg.model.roi_relation_head.embed_dim
+        obj_embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=self.embed_dim)
         self.obj_embed1 = nn.Embedding(self.num_obj_classes, self.embed_dim)
         self.obj_embed2 = nn.Embedding(self.num_obj_classes, self.embed_dim)
         with torch.no_grad():
@@ -245,10 +245,10 @@ class LSTMContext_RNN(nn.Module):
 
         # object & relation context
         self.obj_dim = in_channels
-        self.dropout_rate = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_DROPOUT_RATE
-        self.hidden_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.nl_obj = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_OBJ_LAYER
-        self.nl_edge = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_REL_LAYER
+        self.dropout_rate = self.cfg.model.roi_relation_head.context_dropout_rate
+        self.hidden_dim = self.cfg.model.roi_relation_head.context_hidden_dim
+        self.nl_obj = self.cfg.model.roi_relation_head.context_obj_layer
+        self.nl_edge = self.cfg.model.roi_relation_head.context_rel_layer
         assert self.nl_obj > 0 and self.nl_edge > 0
 
         # TODO Kaihua Tang
@@ -275,7 +275,7 @@ class LSTMContext_RNN(nn.Module):
         
         # untreated average features
         self.average_ratio = 0.0005
-        self.effect_analysis = config.MODEL.ROI_RELATION_HEAD.CAUSAL.EFFECT_ANALYSIS
+        self.effect_analysis = config.model.roi_relation_head.causal.effect_analysis
 
         if self.effect_analysis:
             self.register_buffer("untreated_dcd_feat", torch.zeros(self.hidden_dim + self.obj_dim + self.embed_dim + 128))
@@ -358,15 +358,15 @@ class LSTMContext_RNN(nn.Module):
     def forward(self, x, proposals, rel_pair_idxs, logger=None, all_average=False, ctx_average=False):
         
         # labels will be used in DecoderRNN during training (for nms)
-        if self.training or self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX or self.cfg.MODEL.BACKBONE.FREEZE: # backbone is completely frozen and we consider predictions as GT
-            obj_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0).float()
+        if self.training or self.cfg.model.roi_relation_head.use_gt_box or self.cfg.model.backbone.freeze: # backbone is completely frozen and we consider predictions as GT
+            obj_labels = cat([proposal["labels"] for proposal in proposals], dim=0).float()
         else:
             obj_labels = None
 
-        if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL or self.cfg.MODEL.BACKBONE.FREEZE:
+        if self.cfg.model.roi_relation_head.use_gt_object_label or self.cfg.model.backbone.freeze:
             obj_embed = self.obj_embed1(obj_labels.long())
         else:
-            obj_logits = cat([proposal.get_field("predict_logits") for proposal in proposals], dim=0).detach()
+            obj_logits = cat([proposal["predict_logits"] for proposal in proposals], dim=0).detach()
             obj_embed = F.softmax(obj_logits, dim=1) @ self.obj_embed1.weight
         
         assert proposals[0].mode == 'xyxy'
@@ -383,7 +383,7 @@ class LSTMContext_RNN(nn.Module):
 
         boxes_per_cls = None
         if obj_labels is None and not self.training:
-            boxes_per_cls = cat([proposal.get_field('boxes_per_cls') for proposal in proposals], dim=0) # comes from post process of box_head
+            boxes_per_cls = cat([proposal['boxes_per_cls'] for proposal in proposals], dim=0) # comes from post process of box_head
 
         # object level contextual feature
         obj_dists, obj_preds, obj_ctx, perm, inv_perm, ls_transposed = self.obj_ctx(obj_pre_rep, proposals, obj_labels, boxes_per_cls, ctx_average=ctx_average)
@@ -415,11 +415,11 @@ class LSTMContext(nn.Module):
         self.rel_classes = rel_classes
         self.num_obj_classes = len(obj_classes)
 
-        self.obj_decode = not (self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX or self.cfg.MODEL.BACKBONE.FREEZE)
+        self.obj_decode = not (self.cfg.model.roi_relation_head.use_gt_box or self.cfg.model.backbone.freeze)
 
         # mode
-        if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
-            if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
+        if self.cfg.model.roi_relation_head.use_gt_box:
+            if self.cfg.model.roi_relation_head.use_gt_object_label:
                 self.mode = 'predcls'
             else:
                 self.mode = 'sgcls'
@@ -475,7 +475,7 @@ class LSTMContext(nn.Module):
         
         # untreated average features
         self.average_ratio = 0.0005
-        self.effect_analysis = config.MODEL.ROI_RELATION_HEAD.CAUSAL.EFFECT_ANALYSIS
+        self.effect_analysis = config.model.roi_relation_head.causal.effect_analysis
 
         if self.effect_analysis:
             self.register_buffer("untreated_dcd_feat", torch.zeros(self.hidden_dim + self.obj_dim + self.embed_dim + 128))
@@ -561,15 +561,15 @@ class LSTMContext(nn.Module):
     def forward(self, x, proposals, rel_pair_idxs, logger=None, all_average=False, ctx_average=False):
         
         # labels will be used in DecoderRNN during training (for nms)
-        if self.training or self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX or self.cfg.MODEL.BACKBONE.FREEZE: # backbone is completely frozen and we consider predictions as GT
-            obj_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0).float()
+        if self.training or self.cfg.model.roi_relation_head.use_gt_box or self.cfg.model.backbone.freeze: # backbone is completely frozen and we consider predictions as GT
+            obj_labels = cat([proposal["labels"] for proposal in proposals], dim=0).float()
         else:
             obj_labels = None
 
-        if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL or self.cfg.MODEL.BACKBONE.FREEZE:
+        if self.cfg.model.roi_relation_head.use_gt_object_label or self.cfg.model.backbone.freeze:
             obj_embed = self.obj_embed1(obj_labels.long())
         else:
-            obj_logits = cat([proposal.get_field("predict_logits") for proposal in proposals], dim=0).detach()
+            obj_logits = cat([proposal["predict_logits"] for proposal in proposals], dim=0).detach()
             obj_embed = F.softmax(obj_logits, dim=1) @ self.obj_embed1.weight
         
         assert proposals[0].mode == 'xyxy'
@@ -586,7 +586,7 @@ class LSTMContext(nn.Module):
 
         boxes_per_cls = None
         if obj_labels is None and not self.training:
-            boxes_per_cls = cat([proposal.get_field('boxes_per_cls') for proposal in proposals], dim=0) # comes from post process of box_head
+            boxes_per_cls = cat([proposal['boxes_per_cls'] for proposal in proposals], dim=0) # comes from post process of box_head
 
         # object level contextual feature
         obj_dists, obj_preds, obj_ctx, perm, inv_perm, ls_transposed = self.obj_ctx(obj_pre_rep, proposals, obj_labels, boxes_per_cls, ctx_average=ctx_average)

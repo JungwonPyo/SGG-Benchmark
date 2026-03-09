@@ -59,7 +59,7 @@ class DecoderRNN(nn.Module):
         self.obj_classes = obj_classes
         self.embed_dim = embed_dim
 
-        obj_embed_vecs = obj_edge_vectors(['start'] + self.obj_classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=embed_dim)
+        obj_embed_vecs = obj_edge_vectors(['start'] + self.obj_classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=embed_dim)
         self.obj_embed = nn.Embedding(len(self.obj_classes)+1, embed_dim)
         with torch.no_grad():
             self.obj_embed.weight.copy_(obj_embed_vecs, non_blocking=True)
@@ -67,7 +67,7 @@ class DecoderRNN(nn.Module):
         self.hidden_size = hidden_dim
         self.inputs_dim = inputs_dim
         self.input_size = self.inputs_dim + self.embed_dim
-        self.nms_thresh = self.cfg.TEST.RELATION.LATER_NMS_PREDICTION_THRES
+        self.nms_thresh = self.cfg.test.relation.later_nms_prediction_thres
         self.rnn_drop=rnn_drop
 
         self.input_linearity = torch.nn.Linear(self.input_size, 6 * self.hidden_size, bias=True)
@@ -218,8 +218,8 @@ class LSTMContext_RNN(nn.Module):
         self.num_obj_classes = len(obj_classes)
 
         # mode
-        if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
-            if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
+        if self.cfg.model.roi_relation_head.use_gt_box:
+            if self.cfg.model.roi_relation_head.use_gt_object_label:
                 self.mode = 'predcls'
             else:
                 self.mode = 'sgcls'
@@ -227,8 +227,8 @@ class LSTMContext_RNN(nn.Module):
             self.mode = 'sgdet'
 
         # word embedding
-        self.embed_dim = self.cfg.MODEL.ROI_RELATION_HEAD.EMBED_DIM
-        obj_embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=self.embed_dim)
+        self.embed_dim = self.cfg.model.roi_relation_head.embed_dim
+        obj_embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=self.embed_dim)
         self.obj_embed1 = nn.Embedding(self.num_obj_classes, self.embed_dim)
         self.obj_embed2 = nn.Embedding(self.num_obj_classes, self.embed_dim)
         with torch.no_grad():
@@ -243,16 +243,14 @@ class LSTMContext_RNN(nn.Module):
 
         # object & relation context
         self.obj_dim = in_channels
-        self.dropout_rate = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_DROPOUT_RATE
-        self.hidden_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.nl_obj = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_OBJ_LAYER
-        self.nl_edge = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_REL_LAYER
+        self.dropout_rate = self.cfg.model.roi_relation_head.context_dropout_rate
+        self.hidden_dim = self.cfg.model.roi_relation_head.context_hidden_dim
+        self.nl_obj = self.cfg.model.roi_relation_head.context_obj_layer
+        self.nl_edge = self.cfg.model.roi_relation_head.context_rel_layer
         assert self.nl_obj > 0 and self.nl_edge > 0
 
-        # TODO Kaihua Tang
-        # AlternatingHighwayLSTM is invalid for pytorch 1.0
         self.obj_ctx_rnn = torch.nn.LSTM(
-                input_size=self.obj_dim+self.embed_dim + 128,
+                input_size=self.obj_dim + self.embed_dim + 128,
                 hidden_size=self.hidden_dim,
                 num_layers=self.nl_obj,
                 dropout=self.dropout_rate if self.nl_obj > 1 else 0,
@@ -273,7 +271,7 @@ class LSTMContext_RNN(nn.Module):
         
         # untreated average features
         self.average_ratio = 0.0005
-        self.effect_analysis = config.MODEL.ROI_RELATION_HEAD.CAUSAL.EFFECT_ANALYSIS
+        self.effect_analysis = self.cfg.model.roi_relation_head.causal.effect_analysis
 
         if self.effect_analysis:
             self.register_buffer("untreated_dcd_feat", torch.zeros(self.hidden_dim + self.obj_dim + self.embed_dim + 128))
@@ -286,12 +284,17 @@ class LSTMContext_RNN(nn.Module):
         scores = c_x / (c_x.max() + 1)
         return sort_by_score(proposals, scores)
 
+    def moving_average(self, holder, input):
+        assert len(input.shape) == 2
+        with torch.no_grad():
+            holder = holder * (1 - self.average_ratio) + self.average_ratio * input.mean(0).view(-1)
+        return holder
+
     def obj_ctx(self, obj_feats, proposals, obj_labels=None, boxes_per_cls=None, ctx_average=False):
         """
         Object context and object classification.
         :param obj_feats: [num_obj, img_dim + object embedding0 dim]
         :param obj_labels: [num_obj] the GT labels of the image
-        :param box_priors: [num_obj, 4] boxes. We'll use this for NMS
         :param boxes_per_cls
         :return: obj_dists: [num_obj, #classes] new probability distribution.
                  obj_preds: argmax of that distribution.
@@ -300,8 +303,7 @@ class LSTMContext_RNN(nn.Module):
         # Sort by the confidence of the maximum detection.
         perm, inv_perm, ls_transposed = self.sort_rois(proposals)
         # Pass object features, sorted by score, into the encoder LSTM
-        # Assuming obj_feats is a 2D tensor
-        obj_inp_rep = obj_feats[perm].contiguous()
+        obj_inp_rep = obj_feats[perm, :self.obj_dim + self.embed_dim + 128].contiguous()
         input_packed = PackedSequence(obj_inp_rep, ls_transposed)
         encoder_rep = self.obj_ctx_rnn(input_packed)[0][0]
         encoder_rep = self.lin_obj_h(encoder_rep) # map to hidden_dim
@@ -321,7 +323,7 @@ class LSTMContext_RNN(nn.Module):
         if self.mode != 'predcls':
             decoder_inp = PackedSequence(decoder_inp, ls_transposed)
             obj_dists, obj_preds = self.decoder_rnn(
-                decoder_inp, #obj_dists[perm],
+                decoder_inp, 
                 labels=obj_labels[perm] if obj_labels is not None else None,
                 boxes_for_nms=boxes_per_cls[perm] if boxes_per_cls is not None else None,
                 )
@@ -337,8 +339,6 @@ class LSTMContext_RNN(nn.Module):
     def edge_ctx(self, inp_feats, perm, inv_perm, ls_transposed):
         """
         Object context and object classification.
-        :param obj_feats: [num_obj, img_dim + object embedding0 dim]
-        :return: edge_ctx: [num_obj, #feats] For later!
         """
         edge_input_packed = PackedSequence(inp_feats[perm], ls_transposed)
         edge_reps = self.edge_ctx_rnn(edge_input_packed)[0][0]
@@ -347,27 +347,20 @@ class LSTMContext_RNN(nn.Module):
         edge_ctx = edge_reps[inv_perm]
         return edge_ctx
 
-    def moving_average(self, holder, input):
-        assert len(input.shape) == 2
-        with torch.no_grad():
-            holder = holder * (1 - self.average_ratio) + self.average_ratio * input.mean(0).view(-1)
-        return holder
-
     def forward(self, x, proposals, rel_pair_idxs, logger=None, all_average=False, ctx_average=False):
-        
         # labels will be used in DecoderRNN during training (for nms)
-        if self.training or self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX or self.cfg.MODEL.BACKBONE.FREEZE: # backbone is completely frozen and we consider predictions as GT
-            obj_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0).float()
+        if self.training or self.cfg.model.roi_relation_head.use_gt_box or self.cfg.model.backbone.freeze: 
+            obj_labels = cat([proposal["labels"] for proposal in proposals], dim=0).float()
         else:
             obj_labels = None
 
-        if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL or self.cfg.MODEL.BACKBONE.FREEZE:
+        if self.cfg.model.roi_relation_head.use_gt_object_label or self.cfg.model.backbone.freeze:
             obj_embed = self.obj_embed1(obj_labels.long())
         else:
-            obj_logits = cat([proposal.get_field("predict_logits") for proposal in proposals], dim=0).detach()
+            obj_logits = cat([proposal["predict_logits"] for proposal in proposals], dim=0).detach()
             obj_embed = F.softmax(obj_logits, dim=1) @ self.obj_embed1.weight
         
-        assert proposals[0].mode == 'xyxy'
+        assert proposals[0]["mode"] == 'xyxy'
         pos_embed = self.pos_embed(encode_box_info(proposals))
 
         batch_size = x.shape[0]
@@ -378,10 +371,11 @@ class LSTMContext_RNN(nn.Module):
 
         boxes_per_cls = None
         if obj_labels is None and not self.training:
-            boxes_per_cls = cat([proposal.get_field('boxes_per_cls') for proposal in proposals], dim=0) # comes from post process of box_head
+            boxes_per_cls = cat([proposal["boxes_per_cls"] for proposal in proposals], dim=0)
 
         # object level contextual feature
         obj_dists, obj_preds, obj_ctx, perm, inv_perm, ls_transposed = self.obj_ctx(obj_pre_rep, proposals, obj_labels, boxes_per_cls, ctx_average=ctx_average)
+        
         # edge level contextual feature
         obj_embed2 = self.obj_embed2(obj_preds.long())
 
@@ -396,8 +390,9 @@ class LSTMContext_RNN(nn.Module):
         if self.training and self.effect_analysis:
             self.untreated_obj_feat = self.moving_average(self.untreated_obj_feat, obj_pre_rep)
             self.untreated_edg_feat = self.moving_average(self.untreated_edg_feat, cat((obj_embed2, x), -1))
-
+        
         return obj_dists, obj_preds, edge_ctx, None
+
 
 class LSTMContext(nn.Module):
     """
@@ -410,20 +405,12 @@ class LSTMContext(nn.Module):
         self.rel_classes = rel_classes
         self.num_obj_classes = len(obj_classes)
 
-        self.obj_decode = not (self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX or self.cfg.MODEL.BACKBONE.FREEZE)
-
         # mode
-        if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
-            if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
-                self.mode = 'predcls'
-            else:
-                self.mode = 'sgcls'
-        else:
-            self.mode = 'sgdet'
+        self.obj_decode = self.cfg.model.roi_relation_head.use_gt_object_label == False
 
         # word embedding
-        self.embed_dim = self.cfg.MODEL.ROI_RELATION_HEAD.EMBED_DIM
-        obj_embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=self.embed_dim)
+        self.embed_dim = self.cfg.model.roi_relation_head.embed_dim
+        obj_embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=self.embed_dim)
         self.obj_embed1 = nn.Embedding(self.num_obj_classes, self.embed_dim)
         self.obj_embed2 = nn.Embedding(self.num_obj_classes, self.embed_dim)
         with torch.no_grad():
@@ -438,38 +425,35 @@ class LSTMContext(nn.Module):
 
         # object & relation context
         self.obj_dim = in_channels
-        self.dropout_rate = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_DROPOUT_RATE
-        self.hidden_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.nl_obj = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_OBJ_LAYER
-        self.nl_edge = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_REL_LAYER
+        self.dropout_rate = self.cfg.model.roi_relation_head.context_dropout_rate
+        self.hidden_dim = self.cfg.model.roi_relation_head.context_hidden_dim
+        self.nl_obj = self.cfg.model.roi_relation_head.context_obj_layer
+        self.nl_edge = self.cfg.model.roi_relation_head.context_rel_layer
         assert self.nl_obj > 0 and self.nl_edge > 0
 
-        # TODO Kaihua Tang
-        # AlternatingHighwayLSTM is invalid for pytorch 1.0
         self.obj_ctx_rnn = torch.nn.LSTM(
-                input_size=self.obj_dim+self.embed_dim + 128,
+                input_size=self.obj_dim + self.embed_dim + 128,
                 hidden_size=self.hidden_dim,
                 num_layers=self.nl_obj,
                 dropout=self.dropout_rate if self.nl_obj > 1 else 0,
                 bidirectional=True)
+        self.decoder_rnn = DecoderRNN(self.cfg, self.obj_classes, embed_dim=self.embed_dim,
+                inputs_dim=self.hidden_dim + self.obj_dim + self.embed_dim + 128,
+                hidden_dim=self.hidden_dim,
+                rnn_drop=self.dropout_rate)
         self.edge_ctx_rnn = torch.nn.LSTM(
                 input_size=self.embed_dim + self.hidden_dim + self.obj_dim,
                 hidden_size=self.hidden_dim,
                 num_layers=self.nl_edge,
                 dropout=self.dropout_rate if self.nl_edge > 1 else 0,
                 bidirectional=True)
-        if self.obj_decode:
-            self.decoder_rnn = DecoderRNN(self.cfg, self.obj_classes, embed_dim=self.embed_dim,
-                inputs_dim=self.hidden_dim + self.obj_dim + self.embed_dim + 128,
-                hidden_dim=self.hidden_dim,
-                rnn_drop=self.dropout_rate)
         # map bidirectional hidden states of dimension self.hidden_dim*2 to self.hidden_dim
         self.lin_obj_h = nn.Linear(self.hidden_dim*2, self.hidden_dim)
         self.lin_edge_h = nn.Linear(self.hidden_dim*2, self.hidden_dim)
         
         # untreated average features
         self.average_ratio = 0.0005
-        self.effect_analysis = config.MODEL.ROI_RELATION_HEAD.CAUSAL.EFFECT_ANALYSIS
+        self.effect_analysis = self.cfg.model.roi_relation_head.causal.effect_analysis
 
         if self.effect_analysis:
             self.register_buffer("untreated_dcd_feat", torch.zeros(self.hidden_dim + self.obj_dim + self.embed_dim + 128))
@@ -482,23 +466,17 @@ class LSTMContext(nn.Module):
         scores = c_x / (c_x.max() + 1)
         return sort_by_score(proposals, scores)
 
+    def moving_average(self, holder, input):
+        assert len(input.shape) == 2
+        with torch.no_grad():
+            holder = holder * (1 - self.average_ratio) + self.average_ratio * input.mean(0).view(-1)
+        return holder
+
     def obj_ctx(self, obj_feats, proposals, obj_labels=None, boxes_per_cls=None, ctx_average=False):
-        """
-        Object context and object classification.
-        :param obj_feats: [num_obj, img_dim + object embedding0 dim]
-        :param obj_labels: [num_obj] the GT labels of the image
-        :param box_priors: [num_obj, 4] boxes. We'll use this for NMS
-        :param boxes_per_cls
-        :return: obj_dists: [num_obj, #classes] new probability distribution.
-                 obj_preds: argmax of that distribution.
-                 obj_final_ctx: [num_obj, #feats] For later!
-        """
         # Sort by the confidence of the maximum detection.
         perm, inv_perm, ls_transposed = self.sort_rois(proposals)
         # Pass object features, sorted by score, into the encoder LSTM
-        # Assuming obj_feats is a 2D tensor
-        num_features = self.obj_dim+self.embed_dim + 128  # The number of features the RNN is expecting
-        obj_inp_rep = obj_feats[perm, :num_features].contiguous()
+        obj_inp_rep = obj_feats[perm, :self.obj_dim + self.embed_dim + 128].contiguous()
         input_packed = PackedSequence(obj_inp_rep, ls_transposed)
         encoder_rep = self.obj_ctx_rnn(input_packed)[0][0]
         encoder_rep = self.lin_obj_h(encoder_rep) # map to hidden_dim
@@ -513,32 +491,25 @@ class LSTMContext(nn.Module):
 
         if self.training and self.effect_analysis:
             self.untreated_dcd_feat = self.moving_average(self.untreated_dcd_feat, decoder_inp)
-
+        
         # Decode in order
         if self.obj_decode:
             decoder_inp = PackedSequence(decoder_inp, ls_transposed)
             obj_dists, obj_preds = self.decoder_rnn(
-                decoder_inp, #obj_dists[perm],
+                decoder_inp, 
                 labels=obj_labels[perm] if obj_labels is not None else None,
                 boxes_for_nms=boxes_per_cls[perm] if boxes_per_cls is not None else None,
                 )
             obj_preds = obj_preds[inv_perm]
             obj_dists = obj_dists[inv_perm]
         else:
-            assert obj_labels is not None
             obj_preds = obj_labels
             obj_dists = to_onehot(obj_preds, self.num_obj_classes)
-
         encoder_rep = encoder_rep[inv_perm]
 
         return obj_dists, obj_preds, encoder_rep, perm, inv_perm, ls_transposed
 
     def edge_ctx(self, inp_feats, perm, inv_perm, ls_transposed):
-        """
-        Object context and object classification.
-        :param obj_feats: [num_obj, img_dim + object embedding0 dim]
-        :return: edge_ctx: [num_obj, #feats] For later!
-        """
         edge_input_packed = PackedSequence(inp_feats[perm], ls_transposed)
         edge_reps = self.edge_ctx_rnn(edge_input_packed)[0][0]
         edge_reps = self.lin_edge_h(edge_reps) # map to hidden_dim
@@ -546,27 +517,20 @@ class LSTMContext(nn.Module):
         edge_ctx = edge_reps[inv_perm]
         return edge_ctx
 
-    def moving_average(self, holder, input):
-        assert len(input.shape) == 2
-        with torch.no_grad():
-            holder = holder * (1 - self.average_ratio) + self.average_ratio * input.mean(0).view(-1)
-        return holder
-
     def forward(self, x, proposals, rel_pair_idxs, logger=None, all_average=False, ctx_average=False):
-        
         # labels will be used in DecoderRNN during training (for nms)
-        if self.training or self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX or self.cfg.MODEL.BACKBONE.FREEZE: # backbone is completely frozen and we consider predictions as GT
-            obj_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0).float()
+        if self.training or self.cfg.model.roi_relation_head.use_gt_box or self.cfg.model.backbone.freeze: 
+            obj_labels = cat([proposal["labels"] for proposal in proposals], dim=0).float()
         else:
             obj_labels = None
 
-        if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL or self.cfg.MODEL.BACKBONE.FREEZE:
+        if self.cfg.model.roi_relation_head.use_gt_object_label or self.cfg.model.backbone.freeze:
             obj_embed = self.obj_embed1(obj_labels.long())
         else:
-            obj_logits = cat([proposal.get_field("predict_logits") for proposal in proposals], dim=0).detach()
+            obj_logits = cat([proposal["predict_logits"] for proposal in proposals], dim=0).detach()
             obj_embed = F.softmax(obj_logits, dim=1) @ self.obj_embed1.weight
         
-        assert proposals[0].mode == 'xyxy'
+        assert proposals[0]["mode"] == 'xyxy'
         pos_embed = self.pos_embed(encode_box_info(proposals))
 
         batch_size = x.shape[0]
@@ -577,10 +541,11 @@ class LSTMContext(nn.Module):
 
         boxes_per_cls = None
         if obj_labels is None and not self.training:
-            boxes_per_cls = cat([proposal.get_field('boxes_per_cls') for proposal in proposals], dim=0) # comes from post process of box_head
+            boxes_per_cls = cat([proposal["boxes_per_cls"] for proposal in proposals], dim=0)
 
         # object level contextual feature
         obj_dists, obj_preds, obj_ctx, perm, inv_perm, ls_transposed = self.obj_ctx(obj_pre_rep, proposals, obj_labels, boxes_per_cls, ctx_average=ctx_average)
+        
         # edge level contextual feature
         obj_embed2 = self.obj_embed2(obj_preds.long())
 

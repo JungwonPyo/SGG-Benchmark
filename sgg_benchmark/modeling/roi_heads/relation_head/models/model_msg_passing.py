@@ -10,28 +10,28 @@ from sgg_benchmark.modeling.make_layers import make_fc
 from .utils.utils_motifs import to_onehot
 
 class IMPContext(nn.Module):
-    def __init__(self, config, num_obj, num_rel, in_channels, hidden_dim=512, num_iter=3):
+    def __init__(self, cfg, num_obj, num_rel, in_channels, hidden_dim=512, num_iter=3):
         super(IMPContext, self).__init__()
-        self.cfg = config
+        self.cfg = cfg
         self.num_obj = num_obj
         self.num_rel = num_rel
-        self.pooling_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
+        self.pooling_dim = cfg.model.roi_relation_head.context_pooling_dim
         self.hidden_dim = hidden_dim
         self.num_iter = num_iter
         # mode
-        if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
-            if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
+        if self.cfg.model.roi_relation_head.use_gt_box:
+            if self.cfg.model.roi_relation_head.use_gt_object_label:
                 self.mode = 'predcls'
             else:
                 self.mode = 'sgcls'
         else:
             self.mode = 'sgdet'
 
-        self.rel_fc = make_fc(hidden_dim, self.num_rel)
-        self.obj_fc = make_fc(hidden_dim, self.num_obj)
+        self.rel_fc = make_fc(self.cfg, hidden_dim, self.num_rel)
+        self.obj_fc = make_fc(self.cfg, hidden_dim, self.num_obj)
 
-        self.obj_unary = make_fc(in_channels, hidden_dim)
-        self.edge_unary = make_fc(self.pooling_dim, hidden_dim)
+        self.obj_unary = make_fc(self.cfg, in_channels, hidden_dim)
+        self.edge_unary = make_fc(self.cfg, self.pooling_dim, hidden_dim)
 
 
         self.edge_gru = nn.GRUCell(input_size=hidden_dim, hidden_size=hidden_dim)
@@ -102,7 +102,7 @@ class IMPContext(nn.Module):
             vert_factor.append(self.node_gru(vert_ctx, vert_factor[i]))
 
         if self.mode == 'predcls':
-            obj_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
+            obj_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
             obj_dists = to_onehot(obj_labels, self.num_obj)
         else:
             obj_dists = self.obj_fc(vert_factor[-1])

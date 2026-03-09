@@ -19,15 +19,20 @@ class SimrelRCNN(nn.Module):
 
     def __init__(self, cfg):
         super(SimrelRCNN, self).__init__()
+        if not hasattr(cfg, 'clone'):
+            from sgg_benchmark.config import Config
+            cfg = Config(cfg)
         self.cfg = cfg.clone()
         self.backbone = build_backbone(cfg)
         self.roi_heads = build_roi_heads(cfg, self.backbone.out_channels)
         
-    def forward(self, images, targets=None, logger=None):
+    def forward(self, images, targets=None, logger=None, return_attention=False):
         """
         Arguments:
             images (list[Tensor] or ImageList): images to be processed
             targets (list[BoxList]): ground-truth boxes present in the image (optional)
+            logger: logger for tracking metrics (optional)
+            return_attention (bool): whether to return attention maps (optional)
             
             # 
             targets[0]: BoxList(num_boxes=26, image_width=800, image_height=600, mode=xyxy)
@@ -49,7 +54,7 @@ class SimrelRCNN(nn.Module):
         images = to_image_list(images)
         features = self.backbone(images.tensors)
         
-        x, result, detector_losses = self.roi_heads(features, None, targets, logger, images.tensors)
+        x, result, detector_losses = self.roi_heads(features, None, targets, logger, images.tensors, return_attention=return_attention)
 
         if self.training:
             losses = {}

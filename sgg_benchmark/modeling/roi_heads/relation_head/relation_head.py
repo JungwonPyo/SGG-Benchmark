@@ -1,6 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 import torch
-from torch import nn
 
 from ..attribute_head.roi_attribute_feature_extractors import make_roi_attribute_feature_extractor
 from ..box_head.roi_box_feature_extractors import make_roi_box_feature_extractor
@@ -18,23 +17,32 @@ class ROIRelationHead(torch.nn.Module):
 
     def __init__(self, cfg, in_channels):
         super(ROIRelationHead, self).__init__()
+        if not hasattr(cfg, 'clone'):
+            from sgg_benchmark.config import Config
+            cfg = Config(cfg)
         self.cfg = cfg.clone()
+
+        # Extract a single channel value for box head from multi-scale input if needed
+        if hasattr(in_channels, '__getitem__') and not isinstance(in_channels, torch.Tensor):
+            box_in_channels = int(in_channels[0])
+        else:
+            box_in_channels = in_channels
+
         # same structure with box head, but different parameters
         # these param will be trained in a slow learning rate, while the parameters of box head will be fixed
         # Note: there is another such extractor in uniton_feature_extractor
         if cfg.MODEL.ATTRIBUTE_ON:
-            self.box_feature_extractor = make_roi_box_feature_extractor(cfg, in_channels, half_out=True)
-            self.att_feature_extractor = make_roi_attribute_feature_extractor(cfg, in_channels, half_out=True)
+            self.box_feature_extractor = make_roi_box_feature_extractor(cfg, box_in_channels, half_out=True)
+            self.att_feature_extractor = make_roi_attribute_feature_extractor(cfg, box_in_channels, half_out=True)
             feat_dim = self.box_feature_extractor.out_channels * 2
         else:
-            self.box_feature_extractor = make_roi_box_feature_extractor(cfg, in_channels)
+            self.box_feature_extractor = make_roi_box_feature_extractor(cfg, box_in_channels)
             feat_dim = self.box_feature_extractor.out_channels
-        
-        if not cfg.TEST.CUSTUM_EVAL:
-            statistics = get_dataset_statistics(cfg)
-            pred_prop = statistics['pred_freq']
-            pred_weight = statistics['pred_weight']
-            self.loss_evaluator = make_roi_relation_loss_evaluator(cfg, pred_prop, pred_weight)
+    
+        statistics = get_dataset_statistics(cfg)
+        pred_prop = statistics['pred_freq']
+        pred_weight = statistics['pred_weight']
+        self.loss_evaluator = make_roi_relation_loss_evaluator(cfg, pred_prop, pred_weight)
 
         self.predictor = make_roi_relation_predictor(cfg, feat_dim)
         self.post_processor = make_roi_relation_post_processor(cfg)
@@ -53,7 +61,7 @@ class ROIRelationHead(torch.nn.Module):
             self.pred_freq[0] = 0
             self.pred_freq = self.pred_freq.to(self.cfg.MODEL.DEVICE)
 
-    def forward(self, features, proposals, targets=None, logger=None):
+    def forward(self, features, proposals, targets=None, logger=None, return_attention=False):
         """
         Arguments:
             features (list[Tensor]): feature-maps from possibly several levels
@@ -99,22 +107,26 @@ class ROIRelationHead(torch.nn.Module):
             if not self.training:
                 if self.use_LA:
                     relation_logits = [relation_logits[i] - self.pred_freq for i in range(len(relation_logits))]
-                result = self.post_processor((relation_logits, refine_logits), rel_pair_idxs, proposals)
+                # Use filtered pair idxs if the predictor applied pair pre-filtering
+                eff_pair_idxs = add_losses.pop("_filtered_rel_pair_idxs", None) or rel_pair_idxs
+                result = self.post_processor((relation_logits, refine_logits), eff_pair_idxs, proposals)
                 return roi_features, result, {}
-            loss_relation, loss_refine = self.loss_evaluator(proposals, rel_labels, relation_logits, refine_logits)
+            loss_relation, loss_refine = self.loss_evaluator(proposals, rel_labels, relation_logits, rel_pair_idxs=rel_pair_idxs, rel_features=union_features, refine_logits=refine_logits)
             if self.cfg.MODEL.ATTRIBUTE_ON and isinstance(loss_refine, (list, tuple)):
                 output_losses = dict(loss_rel=loss_relation, loss_refine_obj=loss_refine[0], loss_refine_att=loss_refine[1])
             else:
                 output_losses = dict(loss_rel=loss_relation, loss_refine_obj=loss_refine)
         else:
-            _, relation_logits, add_losses = self.predictor(proposals, rel_pair_idxs, rel_labels, rel_binarys, roi_features, union_features, logger)
+            refine_logits, relation_logits, add_losses = self.predictor(proposals, rel_pair_idxs, rel_labels, rel_binarys, roi_features, union_features, logger)
             # for test
             if not self.training:
                 if self.use_LA:
                     relation_logits = [relation_logits[i] - self.pred_freq for i in range(len(relation_logits))]
-                result = self.post_processor(relation_logits, rel_pair_idxs, proposals)
+                # Use filtered pair idxs if the predictor applied pair pre-filtering
+                eff_pair_idxs = add_losses.pop("_filtered_rel_pair_idxs", None) or rel_pair_idxs
+                result = self.post_processor(relation_logits, eff_pair_idxs, proposals)
                 return roi_features, result, {}
-            loss_relation, _ = self.loss_evaluator(proposals, rel_labels, relation_logits)
+            loss_relation, _ = self.loss_evaluator(proposals, rel_labels, relation_logits, rel_pair_idxs=rel_pair_idxs, rel_features=union_features, refine_logits=refine_logits)
 
             output_losses = dict(loss_rel=loss_relation)
 
@@ -128,4 +140,5 @@ def build_roi_relation_head(cfg, in_channels):
     By default, uses ROIRelationHead, but if it turns out not to be enough, just register a new class
     and make it a parameter in the config
     """
+
     return ROIRelationHead(cfg, in_channels)

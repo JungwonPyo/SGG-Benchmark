@@ -13,7 +13,6 @@ from matplotlib import cm
 from matplotlib.ticker import LinearLocator, FormatStrFormatter
 
 from sgg_benchmark.modeling.poolers import Pooler
-from sgg_benchmark.structures.bounding_box import BoxList
 from sgg_benchmark.utils.txt_embeddings import obj_edge_vectors
 
 from .utils_simrel_old import *
@@ -461,7 +460,7 @@ class Rel_head(nn.Module):
         for b in range(N):
             union_boxes = detached_pred_bboxes[b].view(-1, 4)
             union_boxes = self.get_rel_rois(union_boxes[0::2], union_boxes[1::2])
-            proposal_boxes_union.append(BoxList(union_boxes, img_size[b]))
+            proposal_boxes_union.append({"boxes": union_boxes, "image_size": img_size[b], "mode": "xyxy"})
         
         if features_detach is not None: union_roi_features = pooler(features_detach, proposal_boxes_union)
         else: union_roi_features = pooler(features, proposal_boxes_union)
@@ -1117,7 +1116,7 @@ class Pair_roi_head(nn.Module):
             # roi_feature.
             proposal_boxes = list()
             for b in range(N):
-                proposal_boxes.append(BoxList(bboxes[b].view(-1, 4), img_size[b]))
+                proposal_boxes.append({"boxes": bboxes[b].view(-1, "image_size": 4, "mode": "xyxy"}, img_size[b]))
             roi_features = pooler(features, proposal_boxes)
             roi_features = roi_features.view(
                 N * nr_boxes * 2, dim_in_submap, -1) # B*100*2, dim_in, 49
@@ -1187,7 +1186,7 @@ class Pair_roi_head(nn.Module):
             
             so_proposal_boxes = list()
             for b in range(N):
-                so_proposal_boxes.append(BoxList(so_bboxes[b].view(-1, 4), img_size[b]))
+                so_proposal_boxes.append({"boxes": so_bboxes[b].view(-1, "image_size": 4, "mode": "xyxy"}, img_size[b]))
             if features_detach is not None: so_roi_features = pooler(features_detach, so_proposal_boxes)
             else: so_roi_features = pooler(features, so_proposal_boxes)
             so_roi_features = so_roi_features.view(

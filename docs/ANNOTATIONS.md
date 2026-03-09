@@ -92,8 +92,6 @@ test_dataset = RelationDataset(
 - **filter_non_overlap** (bool): Filter non-overlapping boxes
 - **flip_aug** (bool): Enable horizontal flip augmentation
 - **num_im** (int): Limit number of images (-1 for all)
-- **custom_eval** (bool): Enable custom evaluation mode
-- **custom_path** (str): Path for custom images
 
 ## Key Features Preserved
 

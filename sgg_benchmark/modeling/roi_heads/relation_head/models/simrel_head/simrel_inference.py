@@ -2,8 +2,6 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from sgg_benchmark.structures.bounding_box import BoxList
-
 from torchvision.ops.boxes import box_area
 
 def mymatcher(triplet_outputs, hungarian_targets, matcher, basedd_C=None, return_C=False):
@@ -301,13 +299,17 @@ def inference_obj(features, box, cls_score, img_size_xyxy, num_limit=256, indice
     
     results = list()
     for i in range(N):
-        boxlist = BoxList(select_boxes[i], tuple(img_size_xyxy[i].data.cpu().numpy()))
-        boxlist.add_field('pred_labels', pred_labels[i]) # (#obj, )
-        boxlist.add_field('pred_scores', pred_scores[i]) # (#obj, )
-        boxlist.add_field('predict_logits', select_logit_vecs[i])
-        boxlist.add_field('boxes_per_cls', select_boxes_pre_class[i])
+        boxlist = {
+            "boxes": select_boxes[i],
+            "image_size": tuple(img_size_xyxy[i].data.cpu().numpy()),
+            "mode": "xyxy",
+            "pred_labels": pred_labels[i], # (#obj, )
+            "pred_scores": pred_scores[i], # (#obj, )
+            "predict_logits": select_logit_vecs[i],
+            "boxes_per_cls": select_boxes_pre_class[i],
+        }
         if add_labels is not None:
-            boxlist.add_field('labels', add_labels[i])
+            boxlist["labels"] = add_labels[i]
         results.append(boxlist)
     
     select_feats = torch.cat(select_feats, 0)
@@ -481,12 +483,16 @@ def inference_pair(box_pair, cls_score_pair, rel_score, img_size_xyxy, tri_score
     
     results = list()
     for i in range(N):
-        boxlist = BoxList(obj_boxes[i], tuple(img_size_xyxy[i].data.cpu().numpy()))
-        boxlist.add_field('pred_labels', obj_labels[i]) # (#obj, )
-        boxlist.add_field('pred_scores', obj_scores[i]) # (#obj, )
-        boxlist.add_field('rel_pair_idxs', rel_pair_idx_list[i]) # (#rel, 2)
-        boxlist.add_field('pred_rel_scores', rel_score[i]) # (#rel, #rel_class)
-        boxlist.add_field('pred_rel_labels', rel_labels[i]) # (#rel, )
+        boxlist = {
+            "boxes": obj_boxes[i],
+            "image_size": tuple(img_size_xyxy[i].data.cpu().numpy()),
+            "mode": "xyxy",
+            "pred_labels": obj_labels[i], # (#obj, )
+            "pred_scores": obj_scores[i], # (#obj, )
+            "rel_pair_idxs": rel_pair_idx_list[i], # (#rel, 2)
+            "pred_rel_scores": rel_score[i], # (#rel, #rel_class)
+            "pred_rel_labels": rel_labels[i], # (#rel, )
+        }
         results.append(boxlist)
     return results
     

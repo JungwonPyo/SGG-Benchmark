@@ -109,7 +109,6 @@ def _rename_weights_for_resnet(weights, stage_names):
     except ImportError:
         logger = logging.getLogger(__name__)
 
-    logger.debug("Remapping C2 weights")
     max_c2_key_size = max([len(k) for k in original_keys if "_momentum" not in k])
 
     new_weights = OrderedDict()
@@ -122,7 +121,6 @@ def _rename_weights_for_resnet(weights, stage_names):
         w = torch.from_numpy(v)
         # if "bn" in k:
         #     w = w.view(1, -1, 1, 1)
-        logger.debug("C2 name: {: <{}} mapped name: {}".format(k, max_c2_key_size, key_map[k]))
         new_weights[key_map[k]] = w
 
     return new_weights
@@ -139,32 +137,8 @@ def _load_c2_pickled_weights(file_path):
 
 
 def _rename_conv_weights_for_deformable_conv_layers(state_dict, cfg):
-    import re
-    try:
-        from loguru import logger
-    except ImportError:
-        logger = logging.getLogger(__name__)
-    logger.debug("Remapping conv weights for deformable conv weights")
-    layer_keys = sorted(state_dict.keys())
-    for ix, stage_with_dcn in enumerate(cfg.MODEL.RESNETS.STAGE_WITH_DCN, 1):
-        if not stage_with_dcn:
-            continue
-        for old_key in layer_keys:
-            pattern = ".*layer{}.*conv2.*".format(ix)
-            r = re.match(pattern, old_key)
-            if r is None:
-                continue
-            for param in ["weight", "bias"]:
-                if old_key.find(param) == -1:
-                    continue
-                new_key = old_key.replace(
-                    "conv2.{}".format(param), "conv2.conv.{}".format(param)
-                )
-                logger.debug("pattern: {}, old_key: {}, new_key: {}".format(
-                    pattern, old_key, new_key
-                ))
-                state_dict[new_key] = state_dict[old_key]
-                del state_dict[old_key]
+    # Deformable convolution has been removed from the codebase
+    # This function is now a no-op but kept for compatibility with legacy C2 model loading
     return state_dict
 
 

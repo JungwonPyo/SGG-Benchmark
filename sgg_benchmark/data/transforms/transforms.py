@@ -6,7 +6,7 @@ import torchvision
 from torchvision.transforms import functional as F
 from PIL import Image
 
-from sgg_benchmark.structures.bounding_box import BoxList
+from sgg_benchmark.structures.box_ops import box_resize, box_transpose
 
 import numpy as np
 import cv2    
@@ -124,8 +124,10 @@ class Resize(object):
         image = F.resize(image, size)
         if target is None:
             return image
-        if isinstance(target, BoxList):
-            target = target.resize(image.size)
+        
+        target["boxes"] = box_resize(target["boxes"], target["image_size"], image.size, mode=target["mode"])
+        target["image_size"] = image.size
+        
         return image, target
 
 
@@ -141,7 +143,9 @@ class RandomHorizontalFlip(object):
                 image = F.hflip(image)
             else:
                 raise ValueError("Unsupported image type {}".format(type(image)))
-            target = target.transpose(0)
+            
+            target["boxes"] = box_transpose(target["boxes"], target["image_size"], 0, mode=target["mode"])
+            
         return image, target
 
 class RandomVerticalFlip(object):
@@ -156,7 +160,9 @@ class RandomVerticalFlip(object):
                 image = F.vflip(image)
             else:
                 raise ValueError("Unsupported image type {}".format(type(image)))
-            target = target.transpose(1)
+            
+            target["boxes"] = box_transpose(target["boxes"], target["image_size"], 1, mode=target["mode"])
+            
         return image, target
 
 class ColorJitter(object):
@@ -173,7 +179,15 @@ class ColorJitter(object):
             hue=hue,)
 
     def __call__(self, image, target):
+        import numpy as np
+        from PIL import Image as PILImage
+        # torchvision ColorJitter expects a PIL Image; convert from numpy if needed
+        is_numpy = isinstance(image, np.ndarray)
+        if is_numpy:
+            image = PILImage.fromarray(image)
         image = self.color_jitter(image)
+        if is_numpy:
+            image = np.array(image)
         return image, target
 
 

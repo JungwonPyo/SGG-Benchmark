@@ -9,10 +9,10 @@ import numpy.random as npr
 from sgg_benchmark.layers import smooth_l1_loss, Label_Smoothing_Regression
 from sgg_benchmark.modeling.box_coder import BoxCoder
 from sgg_benchmark.modeling.matcher import Matcher
-from sgg_benchmark.structures.boxlist_ops import boxlist_iou
+from sgg_benchmark.structures.box_ops import box_iou
 from sgg_benchmark.modeling.utils import cat
 
-class RelationHierarchicalLossComputation(object):
+class RelationHierarchicalLossComputation(nn.Module):
     def __init__(
             self,
             attri_on,
@@ -28,6 +28,7 @@ class RelationHierarchicalLossComputation(object):
             bbox_proposal_matcher (Matcher)
             rel_fg_bg_sampler (RelationPositiveNegativeSampler)
         """
+        super(RelationHierarchicalLossComputation, self).__init__()
         self.attri_on = attri_on
         self.num_attri_cat = num_attri_cat
         self.max_num_attri = max_num_attri
@@ -64,7 +65,7 @@ class RelationHierarchicalLossComputation(object):
 
     # Assume no refine obj, only relation prediction
     # relation_logits is [geo, pos, sem, super]
-    def __call__(self, proposals, rel_labels, rel_probs, refine_logits):
+    def forward(self, proposals, rel_labels, relation_logits, refine_logits):
         """
         Computes the loss for relation triplet.
         This requires that the subsample method has been called beforehand.
@@ -78,7 +79,7 @@ class RelationHierarchicalLossComputation(object):
             finetune_obj_loss (Tensor)
         """
         rel1_prob, rel2_prob, rel3_prob, super_rel_prob = rel_probs
-        fg_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
+        fg_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
         refine_obj_logits = cat(refine_logits, dim=0)
         loss_refine_obj = self.criterion_loss(refine_obj_logits, fg_labels.long())
 
