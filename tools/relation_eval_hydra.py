@@ -286,13 +286,16 @@ def main():
         logger.info("Evaluating attributes")
         iou_types = iou_types + ("attributes",)
     
-    # Get dataset names (handles both formats)
-    dataset_names = getattr(cfg, 'DATASETS', None)
-    if dataset_names:
-        dataset_names = dataset_names.TEST
-    else:
-        cfg_dict = cfg.cfg if hasattr(cfg, 'cfg') else cfg._cfg
-        dataset_names = cfg_dict.datasets.test if hasattr(cfg_dict, 'datasets') else []
+    # Get dataset names — always read from the raw DictConfig so we avoid
+    # the Config wrapper's case-insensitive magic returning default empty tuples.
+    raw_cfg = cfg._cfg
+    datasets_cfg = raw_cfg.get('datasets', {})
+    dataset_names = list(datasets_cfg.get('test', []) or [])
+    # Fallback: derive from datasets.name (e.g. "PSG" → "PSG_test")
+    if not dataset_names:
+        ds_name = datasets_cfg.get('name', '')
+        if ds_name:
+            dataset_names = [f"{ds_name}_test"]
     logger.info(f"Evaluating on dataset(s): {dataset_names}")
     
     # Create data loaders

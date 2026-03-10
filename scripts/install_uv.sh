@@ -55,6 +55,7 @@ fi
 # 6. Install the project in editable mode
 echo "Installing sgg_benchmark in editable mode..."
 uv pip install -e .
+source .venv/bin/activate
 
 echo "------------------------------------------------"
 echo "Installation complete!"

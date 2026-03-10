@@ -355,61 +355,61 @@ def main():
         import traceback
         traceback.print_exc()
 
-    # ── Step 5: Embed class names as ONNX metadata ───────────────────────────
+    # ── Step 4: Embed class names as ONNX metadata ───────────────────────────
+    # Done after all graph-level optimisations so the metadata is never stripped.
     def embed_class_names(onnx_path, cfg):
-        """Store obj_classes and rel_classes as JSON in the ONNX model metadata.
+        """Write obj_classes and rel_classes as JSON strings in the ONNX custom_metadata_map."""
+        import json
+        from sgg_benchmark.data import get_dataset_statistics
 
-        The metadata survives ONNX Runtime inference without any extra dependencies:
-            session = ort.InferenceSession(path)
-            meta = session.get_modelmeta().custom_metadata_map
-            obj_classes = json.loads(meta["obj_classes"])
-            rel_classes = json.loads(meta["rel_classes"])
-        """
-        import json as _json
-        if onnx is None:
-            print('onnx package missing — cannot embed class names')
-            return
+        print('Embedding class names into ONNX metadata ...')
         try:
-            from sgg_benchmark.data import get_dataset_statistics
             stats = get_dataset_statistics(cfg)
-            obj_classes = stats.get('obj_classes', [])
-            rel_classes = stats.get('rel_classes', [])
-            # obj_classes may be a dict {idx: name} or a list; normalise to list
-            if isinstance(obj_classes, dict):
-                obj_classes = [obj_classes[i] for i in sorted(obj_classes)]
-            if isinstance(rel_classes, dict):
-                rel_classes = [rel_classes[i] for i in sorted(rel_classes)]
         except Exception as e:
-            print(f'Warning: could not retrieve class names for embedding: {e}')
+            print(f'  Warning: failed to load dataset statistics: {e}')
             return
 
-        model = onnx.load(onnx_path)
-        # Remove any existing class-name keys so we don't duplicate
-        existing = {p.key for p in model.metadata_props}
-        for key in ('obj_classes', 'rel_classes'):
-            if key in existing:
-                for prop in list(model.metadata_props):
-                    if prop.key == key:
-                        model.metadata_props.remove(prop)
-                        break
-        obj_prop = model.metadata_props.add()
-        obj_prop.key   = 'obj_classes'
-        obj_prop.value = _json.dumps(obj_classes)
-        rel_prop = model.metadata_props.add()
-        rel_prop.key   = 'rel_classes'
-        rel_prop.value = _json.dumps(rel_classes)
-        onnx.save(model, onnx_path)
-        print(f'Embedded {len(obj_classes)} object classes and {len(rel_classes)} '
-              f'relation classes into ONNX metadata.')
+        obj_classes = stats.get('obj_classes', [])
+        rel_classes = stats.get('rel_classes', [])
+
+        # obj_classes may be a list or a dict keyed by index.
+        # In both cases, build a flat list, dropping the background entry (index 0).
+        if isinstance(obj_classes, dict):
+            obj_list = [obj_classes[i] for i in sorted(obj_classes) if i != 0]
+        else:
+            # list: index 0 is background — skip it
+            obj_list = list(obj_classes[1:]) if obj_classes else []
+
+        if isinstance(rel_classes, dict):
+            rel_list = [rel_classes[i] for i in sorted(rel_classes)]
+        else:
+            rel_list = list(rel_classes)
+
+        model_proto = onnx.load(onnx_path)
+
+        def _upsert_meta(proto, key, value):
+            for entry in proto.metadata_props:
+                if entry.key == key:
+                    entry.value = value
+                    return
+            entry = proto.metadata_props.add()
+            entry.key = key
+            entry.value = value
+
+        _upsert_meta(model_proto, 'obj_classes', json.dumps(obj_list))
+        _upsert_meta(model_proto, 'rel_classes', json.dumps(rel_list))
+
+        onnx.save(model_proto, onnx_path)
+        print(f'  Embedded {len(obj_list)} object classes and {len(rel_list)} relation classes.')
 
     try:
         embed_class_names(args.onnx_path, cfg)
     except Exception as e:
-        print('Warning: embedding class names failed:', e)
+        print('Warning: failed to embed class names into ONNX metadata:', e)
         import traceback
         traceback.print_exc()
 
-    # ── Step 6: Final validation ─────────────────────────────────────────────
+    # ── Step 5: Final validation ─────────────────────────────────────────────
     def validate_onnx(onnx_path, sample_img):
         print('Validating final ONNX model …')
         import onnxruntime as ort
@@ -445,10 +445,17 @@ def main():
 
         inputs_info  = [(i.name, i.shape) for i in sess.get_inputs()]
         outputs_info = [(o.name, o.shape) for o in sess.get_outputs()]
-        print(f'  Size   : {size_mb:.1f} MB')
-        print(f'  Nodes  : {nodes}')
-        print(f'  Inputs : {inputs_info}')
-        print(f'  Outputs: {outputs_info}')
+        meta = sess.get_modelmeta().custom_metadata_map
+        obj_n = len(__import__('json').loads(meta['obj_classes'])) if 'obj_classes' in meta else 0
+        rel_n = len(__import__('json').loads(meta['rel_classes'])) if 'rel_classes' in meta else 0
+        meta_status = (f'{obj_n} obj classes, {rel_n} rel classes' if obj_n
+                       else '⚠ no embedded class names (--config will be required at inference)')
+
+        print(f'  Size     : {size_mb:.1f} MB')
+        print(f'  Nodes    : {nodes}')
+        print(f'  Inputs   : {inputs_info}')
+        print(f'  Outputs  : {outputs_info}')
+        print(f'  Metadata : {meta_status}')
 
     try:
         validate_onnx(args.onnx_path, sample_img)

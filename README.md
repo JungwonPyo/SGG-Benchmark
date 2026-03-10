@@ -13,9 +13,40 @@ Previous work (PE-NET model) | Our REACT model for Real-Time SGG
 :-: | :-:
 <video src='https://github.com/user-attachments/assets/1e580ecc-6a31-409c-82b5-4488aadaf815' width=480/> | <video src='https://github.com/user-attachments/assets/6dfc22de-176a-4d50-9e3a-e91d8df76777' width=480/>
 
+
 <!-- <p align="center">
-<img src="https://github.com/user-attachments/assets/5335b285-e54b-4d79-88f1-5f4a4ef6aab4" alt="intro_img" width="1080"/>
+<img src="https://github.com/user-attachments/assets/5335b285-e54b-4d79-88f1-5f4a4ef6aab4" alt="intro_img" width="540"/> | <img src="" alt="intro_img" width="540"/>
 </p> -->
+
+## Quick Start 🚀
+
+1. Install
+```bash
+chmod +x scripts/install_uv.sh
+./scripts/install_uv.sh
+source .venv/bin/activate
+```
+
+2. Pick a model from [MODEL_ZOO.md](docs/MODEL_ZOO.md) and download it using 🤗 huggingface:
+```bash
+# Example: REACT++ PSG YOLOv12m (best accuracy/speed trade-off)
+hf download maelic/REACTPlusPlus_PSG yolo12m/react_pp_yolo12m.onnx \
+    --repo-type model --local-dir checkpoints/PSG/react++_yolo12m
+```
+
+3. Run inference with a webcam demo
+```bash
+python demo/webcam_demo_onnx.py \
+    --onnx  checkpoints/PSG/react++_yolo12m/yolo12m/react_pp_yolo12m.onnx \
+    --rel_conf 0.05 --box_conf 0.4
+```
+
+## [NEW] FULL TUTORIAL 🚀 
+
+### We now provide a full notebook tutorial on how to train/test/deploy your own SGG model! Please check it out:
+
+[TUTORIAL.ipynb](docs/TUTORIAL.ipynb)
+
 <!-- 
 ## Background
 
@@ -46,24 +77,18 @@ This codebase is actually a work-in-progress, do not expect everything to work p
 
 ## Contents
 
-1. [Overview](#Overview)
-2. [Install the Requirements](docs/INSTALL.md)
-3. [Prepare the Dataset](docs/DATASET.md)
-4. [Simple Webcam Demo](#demo)
-5. [Supported Models](#supported-models)
-6. [Metrics and Results for our Toolkit](docs/METRICS.md)
-    - [Explanation of R@K, mR@K, zR@K, ng-R@K, ng-mR@K, ng-zR@K, A@K, S2G](docs/METRICS.md#explanation-of-our-metrics)
-    - [Output Format](docs/METRICS.md#output-format-of-our-code)
-    - [Reported Results](docs/METRICS.md#reported-results)
-7. [Training on Scene Graph Generation](#perform-training-on-scene-graph-generation)
-8. [Hyperparameters Tuning](#hyperparameters-tuning)
-9. [Evaluation on Scene Graph Generation](#Evaluation)
-<!-- 9. [**Detect Scene Graphs on Your Custom Images** :star2:](#SGDet-on-custom-images) -->
-<!-- 10. [**Visualize Detected Scene Graphs of Custom Images** :star2:](#Visualize-Detected-SGs-of-Custom-Images) -->
-10. [Other Options that May Improve the SGG](#other-options-that-may-improve-the-SGG)
-<!-- 11. [Tips and Tricks for TDE on any Unbiased Task](#tips-and-Tricks-for-any-unbiased-taskX-from-biased-training) -->
-11. [Frequently Asked Questions](#frequently-asked-questions)
-12. [Citations](#Citations)
+1. [Quick Start](#quick-start-)
+2. [Full Tutorial Notebook](#full-tutorial-)
+3. [Installation](docs/INSTALL.md)
+4. [Datasets Preparation](docs/DATASET.md)
+5. [Model Zoo & Weights](docs/MODEL_ZOO.md)
+6. [Demos (Webcam & Notebook)](demo/README.md)
+7. [Supported Models & Backbones](#supported-models)
+8. [Metrics and Results](docs/METRICS.md)
+9. [Training Instructions](#perform-training-on-scene-graph-generation)
+10. [Hyperparameters Tuning](#hyperparameters-tuning)
+11. [Evaluation Instructions](#evaluation)
+12. [Citations](#citations)
 
 <!-- ## Overview
 
@@ -191,8 +216,8 @@ Results are saved to `checkpoints/PSG/react++_yolo12m/inference_onnx/onnx_eval_s
 
 | Model | R@20 | R@50 | R@100 | mR@20 | mR@50 | mR@100 | mAP@50 | Latency |
 |---|---|---|---|---|---|---|---|---|
-| REACT++ (PyTorch) | 31.11 | 36.29 | 39.44 | 22.73 | 25.75 | 27.55 | 52.60 | 26.3 ms |
-| REACT++ (ONNX) | 32.60 | 37.07 | 38.44 | 23.14 | 25.63 | 26.49 | — | **13.4 ms** (~75 FPS) |
+| REACT++ (PyTorch) | 30.9 | 36.1 | 39.2 | 23.5 | 26.4 | 28.2 | 52.60 | 28.0 ms |
+| REACT++ (ONNX) | 32.7 | 37.2 | 38.6 | 22.7 | 25.2 | 26.1 | — | **13.4 ms** (~75 FPS) |
 
 <!-- ## Alternate links
 

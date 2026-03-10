@@ -9,7 +9,7 @@ import seaborn as sns
 from sgg_benchmark.config import load_config_from_file
 from sgg_benchmark.data.build import build_transforms
 from sgg_benchmark.data import get_dataset_statistics
-from .demo_model import SGG_Model
+from demo_model import SGG_Model
 
 class SGG_ONNX_Model(SGG_Model):
     def __init__(self, config, onnx_path, provider='CUDAExecutionProvider', dcs=100, tracking=False, rel_conf=0.1, box_conf=0.5, show_fps=True) -> None:
@@ -44,15 +44,22 @@ class SGG_ONNX_Model(SGG_Model):
             import json as _json
             _obj = _json.loads(_meta['obj_classes'])
             _rel = _json.loads(_meta['rel_classes'])
-            # Normalise to the same dict format used by get_dataset_statistics
+            # Normalise to the same dict format used by get_dataset_statistics.
+            # Background (index 0) was stripped at export time, so obj classes start at 1
+            # to match the 1-based label indices the model outputs.
             self.stats = {
-                'obj_classes': {i: v for i, v in enumerate(_obj)},
+                'obj_classes': {i: v for i, v in enumerate(_obj, start=1)},
                 'rel_classes': {i: v for i, v in enumerate(_rel)},
             }
             print(f"Loaded {len(_obj)} object classes and {len(_rel)} relation classes "
                   f"from ONNX metadata.")
         else:
             # Fallback: load class names from config + dataset statistics
+            if config is None:
+                raise ValueError(
+                    "This ONNX model does not have embedded class names. "
+                    "Please provide --config pointing to the config.yml file."
+                )
             self.cfg = load_config_from_file(config)
             self.cfg.test.custum_eval = True
             self.cfg.output_dir = os.path.dirname(config)

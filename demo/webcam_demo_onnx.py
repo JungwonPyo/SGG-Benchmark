@@ -23,7 +23,7 @@ def main(args):
 
     # this will create and load the ONNX model
     model = SGG_ONNX_Model(
-        config_path, 
+        config_path,  # may be None when class names are embedded in the ONNX
         onnx_path, 
         provider=provider,
         dcs=dcs, 
@@ -83,7 +83,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Webcam demo using ONNX")
 
-    parser.add_argument('--config', type=str, required=True, help='Path to the config file (needed for labels)')
+    parser.add_argument('--config', type=str, default=None, help='Path to the config file (needed for labels). Not required when class names are embedded in the ONNX model.')
     parser.add_argument('--onnx', type=str, required=True, help='Path to the exported ONNX model')
     parser.add_argument('--provider', type=str, default='CUDAExecutionProvider', choices=['CUDAExecutionProvider', 'TensorrtExecutionProvider', 'CPUExecutionProvider'], help='ONNX Runtime provider')
     parser.add_argument('--webcam', type=int, default=0, help='Webcam index')
@@ -97,7 +97,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # change all relative paths to absolute
-    if not os.path.isabs(args.config):
+    if args.config is not None and not os.path.isabs(args.config):
         args.config = os.path.join(get_path(), args.config)
     if not os.path.isabs(args.onnx):
         args.onnx = os.path.join(get_path(), args.onnx)

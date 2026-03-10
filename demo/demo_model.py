@@ -15,7 +15,6 @@ import cv2
 import seaborn as sns
 import os
 import colorsys
-import json
 import networkx as nx
 from networkx.drawing.nx_agraph import to_agraph
 
