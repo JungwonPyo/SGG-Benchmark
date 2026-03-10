@@ -13,10 +13,9 @@ Previous work (PE-NET model) | Our REACT model for Real-Time SGG
 :-: | :-:
 <video src='https://github.com/user-attachments/assets/1e580ecc-6a31-409c-82b5-4488aadaf815' width=480/> | <video src='https://github.com/user-attachments/assets/6dfc22de-176a-4d50-9e3a-e91d8df76777' width=480/>
 
-
-<!-- <p align="center">
-<img src="https://github.com/user-attachments/assets/5335b285-e54b-4d79-88f1-5f4a4ef6aab4" alt="intro_img" width="540"/> | <img src="" alt="intro_img" width="540"/>
-</p> -->
+REACT++ versus previous work | The REACT++ family
+:-: | :-:
+<img alt="latency_vs_f1_psg" src="https://github.com/user-attachments/assets/81b27eaa-5e82-4401-a942-edd2e6c75422" width="480"/> | <img alt="react_pp_onnx_tradeoff" src="https://github.com/user-attachments/assets/8c7fd3ad-3750-4702-8b1b-9b97f6831108" width="480"/>
 
 ## Quick Start 🚀
 
