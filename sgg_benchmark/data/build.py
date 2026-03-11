@@ -1,5 +1,4 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
-import importlib.util
 import os
 from pathlib import Path
 import bisect
@@ -50,25 +49,15 @@ def _resolve_path(p: str) -> str:
 
 
 def _auto_download(ds_name: str, output_dir: str) -> None:
-    """Download *ds_name* from HuggingFace Hub using tools/download_from_hub.py."""
+    """Download *ds_name* from HuggingFace Hub."""
     try:
         logger = logging.getLogger(__name__)
     except Exception:
         logger = logging.getLogger("sgg_benchmark")
 
-    hub_script = _PROJECT_ROOT / "tools" / "download_from_hub.py"
-    if not hub_script.exists():
-        raise RuntimeError(
-            f"Dataset '{ds_name}' not found at '{output_dir}' and the download "
-            f"script was not found at '{hub_script}'.\n"
-            f"Please run:  python tools/download_from_hub.py --dataset {ds_name}"
-        )
-
     logger.info(f"Auto-downloading '{ds_name}' from HuggingFace Hub → {output_dir} …")
-    spec = importlib.util.spec_from_file_location("download_from_hub", hub_script)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    mod.download_dataset(ds_name, output_dir=Path(output_dir), save_images=False)
+    from .datasets.download import download_dataset
+    download_dataset(ds_name, output_dir=Path(output_dir), save_images=True)
 
 
 def _cfg_to_dict(cfg):

@@ -34,7 +34,6 @@ CONFIG_FILES = [
 EXCLUDED_FOLDERS = [
     "caffe2",
     "quick_schedules",
-    "pascal_voc",
     "cityscapes",
 ]
 

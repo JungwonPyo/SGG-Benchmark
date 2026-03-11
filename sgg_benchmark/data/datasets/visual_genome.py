@@ -15,6 +15,8 @@ from sgg_benchmark.structures.box_ops import (
     box_remove_empty,
     filter_instances
 )
+from .base_dataset import BaseRelationDataset
+from .sg_utils import box_filter, bbox_overlaps
 
 BOX_SCALE = 1024  # Scale at which we have the boxes
 try:
@@ -23,7 +25,7 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
-class VGDataset(torch.utils.data.Dataset):
+class VGDataset(BaseRelationDataset):
     def __init__(self, split, img_dir, roidb_file, dict_file, image_file, zeroshot_file, informative_file=None, transforms=None,
                 filter_empty_rels=True, num_im=-1, num_val_im=5000,
                 filter_duplicate_rels=True, filter_non_overlap=True, flip_aug=False):
@@ -106,38 +108,15 @@ class VGDataset(torch.utils.data.Dataset):
         return img, target, index
 
 
-    def get_statistics(self):
-        fg_matrix, bg_matrix, predicate_new_order, predicate_new_order_count, pred_freq, triplet_freq, pred_weight = get_VG_statistics(img_dir=self.img_dir, roidb_file=self.roidb_file, dict_file=self.dict_file,
-                                                image_file=self.image_file, zeroshot_file=self.zeroshot_file, must_overlap=True)
-        eps = 1e-3
-        bg_matrix += 1
-        #print("Number of non zero in fg_matrix: ", np.count_nonzero(fg_matrix))
-        #fg_matrix[:, :, 0] = bg_matrix
-        fg_sum = fg_matrix.sum(2)[:, :, None]
-        
-        # More robust handling of division by zero and invalid values
-        with np.errstate(divide='ignore', invalid='ignore'):
-            # Normalize fg_matrix by fg_sum, handling zero division
-            normalized = np.divide(fg_matrix, fg_sum, out=np.zeros_like(fg_matrix, dtype=float), where=fg_sum > 0)
-            # Add epsilon and take log, replacing any remaining invalid values
-            pred_dist = np.log(normalized + eps)
-            # Replace any NaN or infinite values with a safe default
-            pred_dist = np.where(np.isfinite(pred_dist), pred_dist, np.log(eps))
-
-        result = {
-            'fg_matrix': torch.from_numpy(fg_matrix),
-            'pred_dist': torch.from_numpy(pred_dist).float(),
-            'obj_classes': self.ind_to_classes,
-            'rel_classes': self.ind_to_predicates,
-            'predicate_new_order': predicate_new_order,
-            'predicate_new_order_count': predicate_new_order_count,
-            'pred_freq': pred_freq,
-            'triplet_freq': triplet_freq,
-            'pred_weight': pred_weight, # pred_weights,
-            #'att_classes': self.ind_to_attributes,
-        }
-
-        return result
+    def _compute_raw_statistics(self):
+        return get_VG_statistics(
+            img_dir=self.img_dir,
+            roidb_file=self.roidb_file,
+            dict_file=self.dict_file,
+            image_file=self.image_file,
+            zeroshot_file=self.zeroshot_file,
+            must_overlap=True,
+        )
     
     def compute_triplet_freq(self, data):
         freq_counter = {}
@@ -158,39 +137,6 @@ class VGDataset(torch.utils.data.Dataset):
         # sort
         freq_counter = dict(sorted(freq_counter.items(), key=lambda item: item[1], reverse=True))
         return freq_counter
-
-    def get_custom_imgs(self, path):
-        self.custom_files = []
-        self.img_info = []
-        if not os.path.exists(path):
-            return
-        if os.path.isdir(path):
-            # check if there is images in the directory
-            files = os.listdir(path)
-            img = ['.jpg', '.jpeg', '.png']
-            # check if there is images in the directory
-            if not any([f.endswith(tuple(img)) for f in files]):
-                return
-            for file_name in os.listdir(path):
-                self.custom_files.append(os.path.join(path, file_name))
-                img = Image.open(os.path.join(path, file_name)).convert("RGB")
-                self.img_info.append({'width':int(img.width), 'height':int(img.height), 'image_id':str(file_name.split('.')[0])})
-        # Expecting a list of paths in a json file
-        if os.path.isfile(path):
-            file_list = json.load(open(path))
-            for file in file_list:
-                self.custom_files.append(file)
-                img = Image.open(file).convert("RGB")
-                self.img_info.append({'width': int(img.width), 'height': int(img.height), 'image_id':str(file_name.split('.')[0])})
-
-    def get_img_info(self, index):
-        # WARNING: original image_file.json has several pictures with false image size
-        # use correct function to check the validity before training
-        # it will take a while, you only need to do it once
-
-        # correct_img_info(self.img_dir, self.image_file)
-        # print(self.img_info)
-        return self.img_info[index]
 
     def get_groundtruth(self, index, evaluation=False, flip_img=False):
         img_info = self.get_img_info(index)
@@ -247,9 +193,6 @@ class VGDataset(torch.utils.data.Dataset):
 
         return target
     
-    def __len__(self):
-        return len(self.filenames)
-
 
 def get_VG_statistics(img_dir, roidb_file, dict_file, image_file, zeroshot_file, must_overlap=True):
     train_data = VGDataset(split='train', img_dir=img_dir, roidb_file=roidb_file, 
@@ -313,43 +256,6 @@ def get_VG_statistics(img_dir, roidb_file, dict_file, image_file, zeroshot_file,
 
     return fg_matrix, bg_matrix, predicate_new_order, predicate_new_order_count, pred_freq, triplet_freq, pred_weights
     
-
-def box_filter(boxes, must_overlap=False):
-    """ Only include boxes that overlap as possible relations. 
-    If no overlapping boxes, use all of them."""
-    n_cands = boxes.shape[0]
-
-    overlaps = bbox_overlaps(boxes.astype(float), boxes.astype(float), to_move=0) > 0
-    np.fill_diagonal(overlaps, 0)
-
-    all_possib = np.ones_like(overlaps, dtype=bool)
-    np.fill_diagonal(all_possib, 0)
-
-    if must_overlap:
-        possible_boxes = np.column_stack(np.where(overlaps))
-
-        if possible_boxes.size == 0:
-            possible_boxes = np.column_stack(np.where(all_possib))
-    else:
-        possible_boxes = np.column_stack(np.where(all_possib))
-    return possible_boxes
-
-def bbox_overlaps(boxes1, boxes2, to_move=1):
-    """
-    boxes1 : numpy, [num_obj, 4] (x1,y1,x2,y2)
-    boxes2 : numpy, [num_obj, 4] (x1,y1,x2,y2)
-    """
-    #print('boxes1: ', boxes1.shape)
-    #print('boxes2: ', boxes2.shape)
-    num_box1 = boxes1.shape[0]
-    num_box2 = boxes2.shape[0]
-    lt = np.maximum(boxes1.reshape([num_box1, 1, -1])[:,:,:2], boxes2.reshape([1, num_box2, -1])[:,:,:2]) # [N,M,2]
-    rb = np.minimum(boxes1.reshape([num_box1, 1, -1])[:,:,2:], boxes2.reshape([1, num_box2, -1])[:,:,2:]) # [N,M,2]
-
-    wh = (rb - lt + to_move).clip(min=0)  # [N,M,2]
-    inter = wh[:, :, 0] * wh[:, :, 1]  # [N,M]
-
-    return inter
 
 def correct_img_info(img_dir, image_file):
     with open(image_file, 'r') as f:

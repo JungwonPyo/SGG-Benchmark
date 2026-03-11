@@ -420,5 +420,80 @@ def run_val(cfg, model, val_data_loaders, distributed, logger, device=None):
                     # mean everything
                     v2 = [np.mean(v) for v in v2]
                 dataset_result[k1][k2] = np.mean(v2)
-    
+    return dataset_result
+
+
+# ---------------------------------------------------------------------------
+# Task-mode helpers (Hydra / OmegaConf config style)
+# ---------------------------------------------------------------------------
+
+def get_mode(cfg):
+    """Infer the task mode string from config flags.
+
+    Returns one of ``"sgdet"``, ``"sgcls"``, or ``"predcls"``.
+    """
+    task = "sgdet"
+    if cfg.model.roi_relation_head.use_gt_box:
+        task = "sgcls"
+        if cfg.model.roi_relation_head.use_gt_object_label:
+            task = "predcls"
+    return task
+
+
+def assert_mode(cfg, task):
+    """Validate that the config flags are consistent with *task*.
+
+    Raises ``AssertionError`` if the flags do not match.
+    """
+    if task == "predcls":
+        assert cfg.model.roi_relation_head.use_gt_box, \
+            "predcls mode requires model.roi_relation_head.use_gt_box=true"
+        assert cfg.model.roi_relation_head.use_gt_object_label, \
+            "predcls mode requires model.roi_relation_head.use_gt_object_label=true"
+    elif task == "sgcls":
+        assert cfg.model.roi_relation_head.use_gt_box, \
+            "sgcls mode requires model.roi_relation_head.use_gt_box=true"
+        assert not cfg.model.roi_relation_head.use_gt_object_label, \
+            "sgcls mode requires model.roi_relation_head.use_gt_object_label=false"
+    elif task == "sgdet":
+        assert not cfg.model.roi_relation_head.use_gt_box, \
+            "sgdet mode requires model.roi_relation_head.use_gt_box=false"
+        assert not cfg.model.roi_relation_head.use_gt_object_label, \
+            "sgdet mode requires model.roi_relation_head.use_gt_object_label=false"
+
+
+def run_test(cfg, model, distributed, logger, output_dir=None):
+    """Run inference on all test splits defined in *cfg*.
+
+    The model is expected to already have the correct weights loaded.
+    Results are written to *output_dir* (defaults to ``cfg.output_dir``).
+    """
+    from sgg_benchmark.data import make_data_loader
+
+    if distributed:
+        model = model.module
+    torch.cuda.empty_cache()
+
+    iou_types = ("bbox", "relations") if cfg.model.relation_on else ("bbox",)
+    out_dir = output_dir or cfg.output_dir
+
+    test_data_loaders = make_data_loader(cfg, mode='test', is_distributed=distributed)
+    dataset_names = cfg.datasets.test
+
+    for dataset_name, test_loader in zip(dataset_names, test_data_loaders):
+        inference(
+            cfg,
+            model,
+            test_loader,
+            dataset_name=dataset_name,
+            iou_types=iou_types,
+            box_only=not cfg.model.relation_on,
+            device=cfg.model.device,
+            expected_results=cfg.test.expected_results,
+            expected_results_sigma_tol=cfg.test.expected_results_sigma_tol,
+            output_folder=out_dir,
+            logger=logger,
+        )
+        synchronize()
+
     return dataset_result

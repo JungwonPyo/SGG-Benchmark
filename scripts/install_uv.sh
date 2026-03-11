@@ -34,7 +34,7 @@ uv pip install git+https://github.com/ultralytics/CLIP.git
 
 # 5c. Install ONNX and ONNX Runtime (GPU if available)
 echo "Installing ONNX and ONNX Runtime (GPU if available)..."
-uv pip install onnx onnx-simplifier onnxruntime-tools || true
+uv pip install onnx || true
 # Prefer onnxruntime-gpu; fall back to cpu wheels if GPU package unavailable
 if uv pip install onnxruntime-gpu; then
     echo "Installed onnxruntime-gpu"

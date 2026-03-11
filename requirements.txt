@@ -16,7 +16,6 @@ ultralytics
 dill
 calflops
 datasets
-onnxruntime
 huggingface_hub
 seaborn
 

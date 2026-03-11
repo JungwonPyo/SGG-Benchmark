@@ -11,6 +11,8 @@ import random
 import cv2
 
 from sgg_benchmark.structures.box_ops import box_iou
+from .base_dataset import BaseRelationDataset
+from .sg_utils import box_filter, bbox_overlaps
 
 try:
     from loguru import logger
@@ -18,7 +20,7 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
-class RelationDataset(torch.utils.data.Dataset):
+class RelationDataset(BaseRelationDataset):
     def __init__(self, annotation_file, img_dir, transforms=None,
                 filter_empty_rels=True, num_im=-1,
                 filter_duplicate_rels=True, filter_non_overlap=True, flip_aug=False):
@@ -286,60 +288,10 @@ class RelationDataset(torch.utils.data.Dataset):
         
         return target
     
-    def get_img_info(self, index):
-        return self.img_info[index]
+
+    def _compute_raw_statistics(self):
+        return get_relation_statistics(dataset=self, must_overlap=True)
     
-    def get_custom_imgs(self, path):
-        """Same implementation as VGDataset for custom evaluation"""
-        self.custom_files = []
-        self.img_info = []
-        if not os.path.exists(path):
-            return
-        if os.path.isdir(path):
-            files = os.listdir(path)
-            img_exts = ['.jpg', '.jpeg', '.png']
-            if not any([f.endswith(tuple(img_exts)) for f in files]):
-                return
-            for file_name in os.listdir(path):
-                self.custom_files.append(os.path.join(path, file_name))
-                img = Image.open(os.path.join(path, file_name)).convert("RGB")
-                self.img_info.append({'width': int(img.width), 'height': int(img.height), 'image_id': str(file_name.split('.')[0])})
-        if os.path.isfile(path):
-            file_list = json.load(open(path))
-            for file in file_list:
-                self.custom_files.append(file)
-                img = Image.open(file).convert("RGB")
-                self.img_info.append({'width': int(img.width), 'height': int(img.height), 'image_id': str(file.split('/')[-1].split('.')[0])})
-    
-    def get_statistics(self):
-        """Compute statistics for the dataset"""
-        fg_matrix, bg_matrix, predicate_new_order, predicate_new_order_count, pred_freq, triplet_freq, pred_weight = get_relation_statistics(
-            dataset=self, must_overlap=True)
-        
-        eps = 1e-3
-        bg_matrix += 1
-        fg_sum = fg_matrix.sum(2)[:, :, None]
-        
-        # Use np.divide with where to avoid RuntimeWarning when fg_sum is 0
-        ratio = np.divide(fg_matrix, fg_sum, out=np.zeros_like(fg_matrix, dtype=float), where=fg_sum > 0)
-        pred_dist = np.log(np.where(fg_sum > 0, ratio, 1e-10) + eps)
-        
-        result = {
-            'fg_matrix': torch.from_numpy(fg_matrix),
-            'pred_dist': torch.from_numpy(pred_dist).float(),
-            'obj_classes': self.ind_to_classes,
-            'rel_classes': self.ind_to_predicates,
-            'predicate_new_order': predicate_new_order,
-            'predicate_new_order_count': predicate_new_order_count,
-            'pred_freq': pred_freq,
-            'triplet_freq': triplet_freq,
-            'pred_weight': pred_weight,
-        }
-        
-        return result
-    
-    def __len__(self):
-        return len(self.filenames)
 
 def get_relation_statistics(dataset, must_overlap=True):
     """
@@ -408,42 +360,6 @@ def get_relation_statistics(dataset, must_overlap=True):
     
     return fg_matrix, bg_matrix, predicate_new_order, predicate_new_order_count, pred_freq, triplet_freq, pred_weights
     
-
-def box_filter(boxes, must_overlap=False):
-    """ Only include boxes that overlap as possible relations. 
-    If no overlapping boxes, use all of them."""
-
-    overlaps = bbox_overlaps(boxes.astype(float), boxes.astype(float), to_move=0) > 0
-    np.fill_diagonal(overlaps, 0)
-
-    all_possib = np.ones_like(overlaps, dtype=bool)
-    np.fill_diagonal(all_possib, 0)
-
-    if must_overlap:
-        possible_boxes = np.column_stack(np.where(overlaps))
-
-        if possible_boxes.size == 0:
-            possible_boxes = np.column_stack(np.where(all_possib))
-    else:
-        possible_boxes = np.column_stack(np.where(all_possib))
-    return possible_boxes
-
-def bbox_overlaps(boxes1, boxes2, to_move=1):
-    """
-    boxes1 : numpy, [num_obj, 4] (x1,y1,x2,y2)
-    boxes2 : numpy, [num_obj, 4] (x1,y1,x2,y2)
-    """
-    #print('boxes1: ', boxes1.shape)
-    #print('boxes2: ', boxes2.shape)
-    num_box1 = boxes1.shape[0]
-    num_box2 = boxes2.shape[0]
-    lt = np.maximum(boxes1.reshape([num_box1, 1, -1])[:,:,:2], boxes2.reshape([1, num_box2, -1])[:,:,:2]) # [N,M,2]
-    rb = np.minimum(boxes1.reshape([num_box1, 1, -1])[:,:,2:], boxes2.reshape([1, num_box2, -1])[:,:,2:]) # [N,M,2]
-
-    wh = (rb - lt + to_move).clip(min=0)  # [N,M,2]
-    inter = wh[:, :, 0] * wh[:, :, 1]  # [N,M]
-
-    return inter
 
 def correct_img_info(img_dir, image_file):
     with open(image_file, 'r') as f:

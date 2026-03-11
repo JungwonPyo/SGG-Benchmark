@@ -62,6 +62,7 @@ sys.path.insert(0, str(project_root))
 
 from sgg_benchmark.data import make_data_loader
 from sgg_benchmark.engine.inference import inference
+from sgg_benchmark.engine.trainer import get_mode, assert_mode, run_test
 from sgg_benchmark.utils.checkpoint import DetectronCheckpointer
 from sgg_benchmark.utils.comm import synchronize, get_rank
 from sgg_benchmark.utils.logger import setup_logger
@@ -112,19 +113,6 @@ def parse_hydra_args():
     
     args, unknown = parser.parse_known_args()
     return args, unknown
-
-
-def assert_mode(cfg, task):
-    """Assert task configuration is correct"""
-    if task == "predcls":
-        assert cfg.model.roi_relation_head.use_gt_box, "predcls mode requires use_gt_box=true"
-        assert cfg.model.roi_relation_head.use_gt_object_label, "predcls mode requires use_gt_object_label=true"
-    elif task == "sgcls":
-        assert cfg.model.roi_relation_head.use_gt_box, "sgcls mode requires use_gt_box=true"
-        assert not cfg.model.roi_relation_head.use_gt_object_label, "sgcls mode requires use_gt_object_label=false"
-    elif task == "sgdet":
-        assert not cfg.model.roi_relation_head.use_gt_box, "sgdet mode requires use_gt_box=false"
-        assert not cfg.model.roi_relation_head.use_gt_object_label, "sgdet mode requires use_gt_object_label=false"
 
 
 def eval_only(hydra_cfg: DictConfig, args):
@@ -470,15 +458,6 @@ def main_hydra(hydra_cfg: DictConfig, args):
         checkpointer.load(args.resume)
         logger.info("Checkpoint loaded successfully for resuming training")
     
-    # Determine task mode
-    def get_mode(cfg):
-        task = "sgdet"
-        if cfg.model.roi_relation_head.use_gt_box:
-            task = "sgcls"
-            if cfg.model.roi_relation_head.use_gt_object_label:
-                task = "predcls"
-        return task
-    
     mode = get_mode(cfg)
     
     # Training arguments
@@ -530,25 +509,7 @@ def main_hydra(hydra_cfg: DictConfig, args):
         if last_check and os.path.exists(last_check):
             logger.info("Loading best checkpoint from {}...".format(last_check))
             _ = checkpointer.load(last_check)
-        
-        # Run inference
-        test_data_loaders = make_data_loader(cfg, mode='test', is_distributed=args.distributed)
-        dataset_names = cfg.datasets.test
-        
-        for dataset_name, test_loader in zip(dataset_names, test_data_loaders):
-            test_results = inference(
-                cfg,
-                model,
-                test_loader,
-                dataset_name=dataset_name,
-                iou_types=("bbox", "relations") if cfg.model.relation_on else ("bbox",),
-                box_only=False if cfg.model.relation_on else True,
-                device=cfg.model.device,
-                expected_results=cfg.test.expected_results,
-                expected_results_sigma_tol=cfg.test.expected_results_sigma_tol,
-                output_folder=output_dir,
-                logger=logger,
-            )
+        run_test(cfg, model, args.distributed, logger, output_dir=output_dir)
             
 def main():
     """Entry point"""
