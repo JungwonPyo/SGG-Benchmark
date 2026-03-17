@@ -37,34 +37,16 @@ DATASET_CONFIGS: dict[str, dict] = {
         "hub_repo":    "maelic/PSG-coco-format",
         "default_dir": _PROJECT_ROOT / "datasets/PSG/coco_format",
         "splits":      ("train", "val", "test"),
-        "image_note": (
-            "PSG uses COCO images.  Download them from:\n"
-            "  https://cocodataset.org/#download\n"
-            "  (train2017.zip + val2017.zip)\n"
-            "and place them under datasets/PSG/coco_format/{train,val,test}/"
-        ),
     },
     "VG150": {
         "hub_repo":    "maelic/VG150-coco-format",
         "default_dir": _PROJECT_ROOT / "datasets/VG150/VG150_coco_format",
         "splits":      ("train", "val", "test"),
-        "image_note": (
-            "VG150 uses Visual Genome images.  Download them from:\n"
-            "  https://cs.stanford.edu/people/rak248/VG_100K_2/images.zip  (~9 GB)\n"
-            "  https://cs.stanford.edu/people/rak248/VG_100K_2/images2.zip (~5 GB)\n"
-            "and place all *.jpg files under datasets/VG150/VG150_coco_format/{train,val,test}/"
-        ),
     },
     "IndoorVG": {
         "hub_repo":    "maelic/IndoorVG-coco-format",
         "default_dir": _PROJECT_ROOT / "datasets/IndoorVG/IndoorVG_coco_format",
         "splits":      ("train", "val", "test"),
-        "image_note": (
-            "IndoorVG uses Visual Genome images.  Download them from:\n"
-            "  https://cs.stanford.edu/people/rak248/VG_100K_2/images.zip  (~9 GB)\n"
-            "  https://cs.stanford.edu/people/rak248/VG_100K_2/images2.zip (~5 GB)\n"
-            "and place all *.jpg files under datasets/IndoorVG/IndoorVG_coco_format/{train,val,test}/"
-        ),
     },
 }
 

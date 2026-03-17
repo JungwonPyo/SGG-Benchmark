@@ -2,6 +2,8 @@ import cv2
 import argparse
 import os
 import sys
+import time
+import imageio
 
 # Add current directory to path if needed
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -20,6 +22,7 @@ def main(args):
     save_path = args.save_path
     visu_type = args.visu_type
     provider = args.provider
+    video_path = args.video_path
 
     # this will create and load the ONNX model
     model = SGG_ONNX_Model(
@@ -32,19 +35,38 @@ def main(args):
         box_conf=box_conf
     )
 
-    # Open the webcam
-    cap = cv2.VideoCapture(args.webcam)
-
-    if not cap.isOpened():
-        print(f"Error: Could not open webcam {args.webcam}")
-        return
+    # Open video file or webcam
+    if video_path is not None:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            print(f"Error: Could not open video file {video_path}")
+            return
+        # Auto-derive output path: same dir, "output_" prefix, force .mp4
+        video_dir  = os.path.dirname(os.path.abspath(video_path))
+        video_stem = os.path.splitext(os.path.basename(video_path))[0]
+        save_path  = os.path.join(video_dir, "output_" + video_stem + ".mp4")
+    else:
+        cap = cv2.VideoCapture(args.webcam)
+        if not cap.isOpened():
+            print(f"Error: Could not open webcam {args.webcam}")
+            return
+        if save_path is not None:
+            save_path = os.path.join(get_path(), save_path)
 
     if save_path is not None:
-        save_path = os.path.join(get_path(), save_path)
-        video_size = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-        video_out = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'XVID'), 30, video_size)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        # imageio-ffmpeg bundles its own FFmpeg with libx264 — no system deps needed
+        video_out = imageio.get_writer(
+            save_path,
+            fps=fps,
+            codec='libx264',
+            quality=None,
+            output_params=['-crf', '23', '-preset', 'fast'],
+        )
+        print(f"Saving output to: {save_path}")
 
-    print("Starting webcam demo. Press 'q' to quit, 'p' to pause.")
+    source_label = video_path if video_path is not None else f"webcam {args.webcam}"
+    print(f"Starting demo on {source_label}. Press 'q' to quit, 'p' to pause.")
     while True:
         # Capture frame-by-frame
         ret, frame = cap.read()
@@ -64,7 +86,8 @@ def main(args):
         cv2.imshow('SGG ONNX Demo', img)
 
         if save_path is not None:
-            video_out.write(img)
+            # imageio expects RGB; OpenCV gives BGR
+            video_out.append_data(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
 
         # Handle keyboard input
         key = cv2.waitKey(1) & 0xFF
@@ -74,7 +97,7 @@ def main(args):
             break
 
     if save_path is not None:
-        video_out.release()
+        video_out.close()
 
     # When everything is done, release the capture and destroy the windows
     cap.release()
@@ -91,7 +114,8 @@ if __name__ == "__main__":
     parser.add_argument('--rel_conf', type=float, default=0.01, help='Relation triplet-score threshold (geometric mean of rel×subj×obj)')
     parser.add_argument('--box_conf', type=float, default=0.4, help='Box confidence threshold (non-relation boxes only)')
     parser.add_argument('--dcs', type=int, default=100, help='Dynamic Candidate Selection')
-    parser.add_argument('--save_path', type=str, default=None, help='Path to save the video')
+    parser.add_argument('--video_path', type=str, default=None, help='Path to an input video file (overrides --webcam; output saved as output_<filename> in the same directory)')
+    parser.add_argument('--save_path', type=str, default=None, help='Path to save the video (webcam mode only; ignored when --video_path is set)')
     parser.add_argument('--visu_type', type=str, default='video', help='Visualization type: video or image')
 
     args = parser.parse_args()
@@ -101,5 +125,7 @@ if __name__ == "__main__":
         args.config = os.path.join(get_path(), args.config)
     if not os.path.isabs(args.onnx):
         args.onnx = os.path.join(get_path(), args.onnx)
+    if args.video_path is not None and not os.path.isabs(args.video_path):
+        args.video_path = os.path.join(get_path(), args.video_path)
 
     main(args)

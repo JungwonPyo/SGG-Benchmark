@@ -17,6 +17,18 @@ REACT++ versus previous work | The REACT++ family
 :-: | :-:
 <img alt="latency_vs_f1_psg" src="https://github.com/user-attachments/assets/81b27eaa-5e82-4401-a942-edd2e6c75422" width="480"/> | <img alt="react_pp_onnx_tradeoff" src="https://github.com/user-attachments/assets/8c7fd3ad-3750-4702-8b1b-9b97f6831108" width="480"/>
 
+## Very Quick Start 🚀
+
+If you don't want to install the codebase, we provide a minimal running example with ONNX Runtime under [demo/standalone_onnx_demo.py](demo/standalone_onnx_demo.py) that you can run with a single command after downloading an onnx model from the [MODEL_ZOO.md](docs/MODEL_ZOO.md):
+
+```bash
+# You need to have CUDA and cudnn installed for GPU inference with the onnxruntime-gpu package.
+pip install onnxruntime-gpu opencv-python numpy
+python demo/standalone_onnx_demo.py \
+    --onnx checkpoints/PSG/react++_yolo12m/model.onnx \
+    --rel_conf 0.05 --box_conf 0.4
+```
+
 ## Quick Start 🚀
 
 1. Install
@@ -39,6 +51,8 @@ python demo/webcam_demo_onnx.py \
     --onnx  checkpoints/PSG/react++_yolo12m/yolo12m/react_pp_yolo12m.onnx \
     --rel_conf 0.05 --box_conf 0.4
 ```
+
+Check the [demo](demo/) folder for more demos and details.
 
 ## [NEW] FULL TUTORIAL 🚀 
 
@@ -81,13 +95,12 @@ This codebase is actually a work-in-progress, do not expect everything to work p
 3. [Installation](docs/INSTALL.md)
 4. [Datasets Preparation](docs/DATASET.md)
 5. [Model Zoo & Weights](docs/MODEL_ZOO.md)
-6. [Demos (Webcam & Notebook)](demo/README.md)
-7. [Supported Models & Backbones](#supported-models)
-8. [Metrics and Results](docs/METRICS.md)
-9. [Training Instructions](#perform-training-on-scene-graph-generation)
-10. [Hyperparameters Tuning](#hyperparameters-tuning)
-11. [Evaluation Instructions](#evaluation)
-12. [Citations](#citations)
+6. [Supported Models & Backbones](#supported-models)
+7. [Metrics and Results](docs/METRICS.md)
+8. [Training Instructions](#perform-training-on-scene-graph-generation)
+9. [Hyperparameters Tuning](#hyperparameters-tuning)
+10. [Evaluation Instructions](#evaluation)
+11. [Citations](#citations)
 
 <!-- ## Overview
 
@@ -102,14 +115,6 @@ Check [INSTALL.md](docs/INSTALL.md) for installation instructions.
 ## Datasets
 
 Check [DATASET.md](docs/DATASET.md) for instructions regarding dataset preprocessing, including how to create your own dataset with [SGG-Annotate](https://github.com/Maelic/SGG-Annotate).
-
-## DEMO
-
-You can [download a pre-train model](docs/MODEL_ZOO.md) or [train your own model](#perform-training-on-scene-graph-generation) and run my off-the-shelf demo!
-
-You can use the [SGDET_on_custom_images.ipynb](demo/SGDET_on_custom_images.ipynb) notebook to visualize detections on images.
-
-I also made a demo code to try SGDET with your webcam in the [demo folder](./demo/README.md), feel free to have a look!
 
 ## Supported Models
 
@@ -211,37 +216,15 @@ python tools/eval_onnx_psg.py --run-dir checkpoints/PSG/react++_yolo12m --provid
 
 Results are saved to `checkpoints/PSG/react++_yolo12m/inference_onnx/onnx_eval_summary.json`.
 
-**PSG SGDet results** (YOLO12m backbone):
-
-| Model | R@20 | R@50 | R@100 | mR@20 | mR@50 | mR@100 | mAP@50 | Latency |
-|---|---|---|---|---|---|---|---|---|
-| REACT++ (PyTorch) | 30.9 | 36.1 | 39.2 | 23.5 | 26.4 | 28.2 | 52.60 | 28.0 ms |
-| REACT++ (ONNX) | 32.7 | 37.2 | 38.6 | 22.7 | 25.2 | 26.1 | — | **13.4 ms** (~75 FPS) |
-
-<!-- ## Alternate links
-
-Since OneDrive links might be broken in mainland China, we also provide the following alternate links for all the pretrained models and dataset annotations using BaiduNetDisk: 
-
-Link：[https://pan.baidu.com/s/1oyPQBDHXMQ5Tsl0jy5OzgA](https://pan.baidu.com/s/1oyPQBDHXMQ5Tsl0jy5OzgA)
-Extraction code：1234 -->
 ## YOLOV8/9/10/11/12/World Pre-training
 
 If you want to use YoloV8/9/10/11/12 or Yolo-World as a backbone instead of Faster-RCNN, you need to first train a model using the official [ultralytics implementation](https://github.com/ultralytics/ultralytics). To help you with that, I have created a [dedicated notebook](process_data/convert_to_yolo.ipynb) to generate annotations in YOLO format from a .h5 file (SGG format). 
-Once you have a model, you can modify [this config file](configs/VG150/e2e_relation_yolov8m.yaml) and change the path `PRETRAINED_DETECTOR_CKPT` to your model weights. Please note that you will also need to change the variable `SIZE` and `OUT_CHANNELS` accordingly if you use another variant of YOLO (nano, small or large for instance). 
-For training an SGG model with YOLO as a backbone, you need to modify the `META_ARCHITECTURE` variable in the same config file to `GeneralizedYOLO`. You can then follow the standard procedure for PREDCLS, SGCLS or SGDET training below.
+Once you have a model, you can modify [a config file](configs/hydra) and change the path `pretrained_detector_ckpt` to your model weights. Please note that you will also need to change the variable `yolo.size` and `yolo.out_channels` accordingly if you use another variant of YOLO (nano, small or large for instance). 
+For training an SGG model with YOLO as a backbone, you need to modify the `meta_architecture` variable in the same config file to `GeneralizedYOLO`. You can then follow the standard procedure for training below.
 
 ## Faster R-CNN pre-training (legacy)
 
 We do not support Faster-RCNN pre-training anymore.
-
-<!-- 
-:warning: Faster-RCNN pre-training is not officially supported anymore in this codebase, please use a YOLO backbone instead (see above). Using `detector_pretrain_net.py` will NOT WORK with a YOLO backbone.
-
-The following command can be used to train your own Faster R-CNN model:
-```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.launch --master_port 10001 --nproc_per_node=4 tools/detector_pretrain_net.py --config-file "configs/e2e_relation_detector_X_101_32_8_FPN_1x.yaml" SOLVER.IMS_PER_BATCH 8 TEST.IMS_PER_BATCH 4 DTYPE "float16" SOLVER.MAX_EPOCH 20 MODEL.RELATION_ON False OUTPUT_DIR ./checkpoints/pretrained_faster_rcnn SOLVER.PRE_VAL False
-```
-where ```CUDA_VISIBLE_DEVICES``` and ```--nproc_per_node``` represent the id of GPUs and number of GPUs you use, ```--config-file``` means the config we use, where you can change other parameters. ```SOLVER.IMS_PER_BATCH``` and ```TEST.IMS_PER_BATCH``` are the training and testing batch size respectively, ```DTYPE "float16"``` enables Automatic Mixed Precision, ```OUTPUT_DIR``` is the output directory to save checkpoints and log (considering `/home/username/checkpoints/pretrained_faster_rcnn`), ```SOLVER.PRE_VAL``` means whether we conduct validation before training or not. -->
 
 ## Perform training on Scene Graph Generation
 
@@ -265,34 +248,34 @@ We abstract various SGG models to be different ```relation-head predictors``` in
 
 For [REACT++](https://arxiv.org/abs/2603.06386) Model:
 ```bash
-MODEL.ROI_RELATION_HEAD.PREDICTOR REACTPlusPlusPredictor
+model.roi_relation_head.predictor REACTPlusPlusPredictor
 ```
 
 For [REACT](https://arxiv.org/abs/2405.16116v2) Model:
 ```bash
-MODEL.ROI_RELATION_HEAD.PREDICTOR REACTPredictor
+model.roi_relation_head.predictor  REACTPredictor
 ```
 
 For [PE-NET](https://arxiv.org/abs/2303.07096) Model:
 ```bash
-MODEL.ROI_RELATION_HEAD.PREDICTOR PrototypeEmbeddingNetwork
+model.roi_relation_head.predictor PrototypeEmbeddingNetwork
 ```
 
 For [Neural-MOTIFS](https://arxiv.org/abs/1711.06640) Model:
 ```bash
-MODEL.ROI_RELATION_HEAD.PREDICTOR MotifPredictor
+model.roi_relation_head.predictor  MotifPredictor
 ```
 For [Iterative-Message-Passing(IMP)](https://arxiv.org/abs/1701.02426) Model (Note that SOLVER.BASE_LR should be changed to 0.001 in SGCls, or the model won't converge):
 ```bash
-MODEL.ROI_RELATION_HEAD.PREDICTOR IMPPredictor
+model.roi_relation_head.predictor  IMPPredictor
 ```
 For [VCTree](https://arxiv.org/abs/1812.01880) Model:
 ```bash
-MODEL.ROI_RELATION_HEAD.PREDICTOR VCTreePredictor
+model.roi_relation_head.predictor VCTreePredictor
 ```
 For Transformer Model (Note that Transformer Model needs to change SOLVER.BASE_LR to 0.001, SOLVER.SCHEDULE.TYPE to WarmupMultiStepLR, SOLVER.MAX_ITER to 16000, SOLVER.IMS_PER_BATCH to 16, SOLVER.STEPS to (10000, 16000).), which is provided by [Jiaxin Shi](https://github.com/shijx12):
 ```bash
-MODEL.ROI_RELATION_HEAD.PREDICTOR TransformerPredictor
+model.roi_relation_head.predictor TransformerPredictor
 ```
 
 ### Examples of the Training Command

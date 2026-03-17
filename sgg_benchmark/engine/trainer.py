@@ -480,8 +480,9 @@ def run_test(cfg, model, distributed, logger, output_dir=None):
     test_data_loaders = make_data_loader(cfg, mode='test', is_distributed=distributed)
     dataset_names = cfg.datasets.test
 
+    results = {}
     for dataset_name, test_loader in zip(dataset_names, test_data_loaders):
-        inference(
+        dataset_result = inference(
             cfg,
             model,
             test_loader,
@@ -495,5 +496,6 @@ def run_test(cfg, model, distributed, logger, output_dir=None):
             logger=logger,
         )
         synchronize()
+        results[dataset_name] = dataset_result
 
-    return dataset_result
+    return results

@@ -9,7 +9,7 @@ import seaborn as sns
 from sgg_benchmark.config import load_config_from_file
 from sgg_benchmark.data.build import build_transforms
 from sgg_benchmark.data import get_dataset_statistics
-from demo_model import SGG_Model
+from .demo_model import SGG_Model
 
 class SGG_ONNX_Model(SGG_Model):
     def __init__(self, config, onnx_path, provider='CUDAExecutionProvider', dcs=100, tracking=False, rel_conf=0.1, box_conf=0.5, show_fps=True) -> None:
@@ -137,8 +137,8 @@ class SGG_ONNX_Model(SGG_Model):
         # 2. ONNX Inference
         t_start = time.time()
         outputs = self.session.run(None, {self.input_name: img_numpy})
-        det_time = (time.time() - t_start) * 1000
-        self.detec_time_bench.append(det_time)
+        det_time = (time.time() - start_time)
+        self.detec_time_bench.append((time.time() - t_start) * 1000)
         
         # 3. Post-processing
         t_start2 = time.time()
@@ -224,14 +224,13 @@ class SGG_ONNX_Model(SGG_Model):
             # Use a copy for drawing to avoid modifying the original if shared
             out_img = self.draw_full_graph(image.copy(), bboxes, rels)
             
-            true_fps = 1.0 / (time.time() - self.last_time) if self.last_time > 0 else 0
-            self.last_time = time.time()
+            true_fps = 1.0 / det_time if det_time > 0 else float('inf')
             
             # Use nicer text display from demo_model or similar
             image_height, image_width = out_img.shape[:2]
             font_scale = (0.3 * image_width) / 500
             # White text with black shadow for better visibility
-            for i, text in enumerate([f"FPS: {true_fps:.1f}", f"Inference: {det_time:.1f}ms"]):
+            for i, text in enumerate([f"FPS: {true_fps:.1f}", f"Inference: {det_time*1000:.1f}ms"]):
                 pos = (15, 30 + i * 40)
                 cv2.putText(out_img, text, pos, cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), 3, cv2.LINE_AA)
                 cv2.putText(out_img, text, pos, cv2.FONT_HERSHEY_SIMPLEX, font_scale, (50, 255, 50), 2, cv2.LINE_AA)

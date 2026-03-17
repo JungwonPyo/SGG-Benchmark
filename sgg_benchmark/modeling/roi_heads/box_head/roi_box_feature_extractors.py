@@ -250,9 +250,9 @@ class DAMPBoxFeatureExtractor(nn.Module):
     """Detection-Anchored Multi-Scale Pooling (DAMP).
 
     A drop-in replacement for RoI Align that exploits a signal already produced
-    by the YOLO detector: ``feat_idx``, the flat index of the FPN grid cell where
-    the detection confidence was highest.  Rather than re-sampling the image with
-    bilinear interpolation over a 7×7 grid (as RoI Align does), DAMP treats the
+    by the YOLO detector: ``feat_idx``, the flat index of the Neck grid cell that 
+    was used to produce the box.  Rather than re-sampling the image with
+    bilinear interpolation over a 7x7 grid (as RoI Align does), DAMP treats the
     confidence-peak cell as a precision anchor and aggregates features around it
     across all FPN pyramid levels in a single O(N) pass.
 
@@ -261,7 +261,7 @@ class DAMPBoxFeatureExtractor(nn.Module):
     This introduces two sources of noise for scene-graph tasks:
       1. Box imprecision — especially for small or partially occluded objects, the
          regressed box may not be well-centred on the object's discriminative region.
-      2. Fixed resolution — a 7×7 grid captures the same spatial extent regardless
+      2. Fixed resolution — a 7x7 grid captures the same spatial extent regardless
          of object scale, diluting features for tiny objects and wasting compute for
          large ones.
 
@@ -277,7 +277,7 @@ class DAMPBoxFeatureExtractor(nn.Module):
 
       1. Decode the detection anchor to fractional image coordinates:            O(N)
              level   ← bucketize(feat_idx, cumulative level sizes)
-             (r, c)  ← divmod(feat_idx − level_offset, level_width)
+             (r, c)  ← divmod(feat_idx - level_offset, level_width)
              cx_frac ← (c + 0.5) / W_level  ∈ (0, 1)
              cy_frac ← (r + 0.5) / H_level  ∈ (0, 1)
 
@@ -291,8 +291,8 @@ class DAMPBoxFeatureExtractor(nn.Module):
 
       4. Fuse:  o ← Linear(LN([f_P3 ‖ f_P4 ‖ f_P5]))  →  ℝᴰ
 
-    Steps 2–3 process only N·K·L vectors (e.g. 80×1×3 = 240) instead of
-    projecting all 8400 spatial tokens and discarding 35× of the work.
+    Steps 2-3 process only N·K·L vectors (e.g. 80x1x3 = 240) instead of
+    projecting all 8400 spatial tokens and discarding 35x of the work.
 
     ── Config ────────────────────────────────────────────────────────────────────
       feat_idx_multiscale : bool  gather P3+P4+P5 (True, default) or assigned level only

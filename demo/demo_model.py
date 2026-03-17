@@ -82,6 +82,7 @@ class SGG_Model(object):
         self.pre_time_bench = []
         self.detec_time_bench = []
         self.post_time_bench = []
+        self._last_bboxes = None  # exposed for external heatmap overlays
 
     def load_model(self):
         self.model = build_detection_model(self.cfg)
@@ -125,6 +126,7 @@ class SGG_Model(object):
         bboxes, rels = self._post_process2(predictions[0], orig_size=image.shape[:2], box_thres=self.box_conf, rel_threshold=self.rel_conf)
         bboxes = bboxes.cpu().numpy()
         rels = rels.cpu().numpy()
+        self._last_bboxes = bboxes  # cache for external consumers (e.g. heatmap demo)
         post_process_time = time.time()
     
         # update tracker

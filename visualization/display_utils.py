@@ -2,7 +2,9 @@ from PIL import Image, ImageDraw, ImageFont
 import random
 import os
 import json
+import colorsys
 import numpy as np
+import cv2
 import altair as alt
 
 USE_BOX_SIZE = 1024
@@ -262,6 +264,153 @@ def show_all_rel_on_image(image_data, vg_sgg, vg_sgg_dicts, img_idx, vg_img_path
         string+=i[0]+' '+i[1]+' '+i[2]+', '
     print(string)
     return display(pic)
+
+def _get_color(idx):
+    """Deterministic per-class color via golden-ratio hue spacing. Returns BGR tuple for OpenCV."""
+    h = (idx * 0.618033988749895) % 1.0
+    r, g, b = colorsys.hsv_to_rgb(h, 0.7, 0.9)
+    return (int(b * 255), int(g * 255), int(r * 255))
+
+
+def _draw_bbox_cv2(img, bbox, label, cls_id):
+    """Fancy box with corner accents and a tight label background (OpenCV)."""
+    left, top, right, bottom = [int(b) for b in bbox]
+    color = _get_color(cls_id)
+
+    cv2.rectangle(img, (left, top), (right, bottom), color, 1)
+    length = min(15, int((right - left) * 0.2 + 1), int((bottom - top) * 0.2 + 1))
+    for (x, y), (dx, dy) in [
+        ((left,  top),    ( 1,  1)),
+        ((right, top),    (-1,  1)),
+        ((left,  bottom), ( 1, -1)),
+        ((right, bottom), (-1, -1)),
+    ]:
+        cv2.line(img, (x, y), (x + dx * length, y), color, 3)
+        cv2.line(img, (x, y), (x, y + dy * length), color, 3)
+
+    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+    if top - th - 5 < 0:
+        cv2.rectangle(img, (left, top), (left + tw + 4, top + th + 5), color, -1)
+        cv2.putText(img, label, (left + 2, top + th + 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+    else:
+        cv2.rectangle(img, (left, top - th - 5), (left + tw + 4, top), color, -1)
+        cv2.putText(img, label, (left + 2, top - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+
+    return (left + right) // 2, (top + bottom) // 2
+
+
+def load_coco_annotations(json_path):
+    """Load a COCO-format scene graph annotation file.
+    Returns (images_by_id, annos_by_id, cat_by_id, rel_annos_by_img, rel_cat_by_id).
+    """
+    with open(json_path, 'r') as f:
+        data = json.load(f)
+    images_by_id = {img['id']: img for img in data['images']}
+    annos_by_id = {ann['id']: ann for ann in data['annotations']}
+    cat_by_id = {cat['id']: cat['name'] for cat in data['categories']}
+    rel_cat_by_id = {cat['id']: cat['name'] for cat in data['rel_categories']}
+    rel_annos_by_img = {}
+    for rel in data['rel_annotations']:
+        rel_annos_by_img.setdefault(rel['image_id'], []).append(rel)
+    return images_by_id, annos_by_id, cat_by_id, rel_cat_by_id, rel_annos_by_img
+
+
+def show_all_rel_on_image_coco(images_by_id, annos_by_id, cat_by_id, rel_cat_by_id,
+                                rel_annos_by_img, img_id, img_folder):
+    """Visualise all scene-graph relations for one image from a COCO-format dataset.
+
+    Uses the same OpenCV drawing style as the standalone ONNX demo:
+    corner-accented boxes with per-class colours, orange/white relation lines
+    with arrowheads and predicate labels.
+
+    Parameters
+    ----------
+    images_by_id : dict   image_id -> image metadata dict
+    annos_by_id  : dict   annotation_id -> annotation dict (bbox in COCO [x,y,w,h])
+    cat_by_id    : dict   category_id -> label name
+    rel_cat_by_id: dict   predicate_id -> predicate name
+    rel_annos_by_img: dict image_id -> list of relation dicts
+    img_id       : int    id of the image to show
+    img_folder   : str    folder that contains the image files
+    """
+    from matplotlib import pyplot as plt
+
+    img_meta = images_by_id[img_id]
+    img_path = os.path.join(img_folder, img_meta['file_name'])
+    img = cv2.imread(img_path)
+    if img is None:
+        raise FileNotFoundError(f"Image not found: {img_path}")
+    print("Image: {}".format(img_meta['file_name']))
+
+    rels = rel_annos_by_img.get(img_id, [])
+
+    # Draw all boxes involved in at least one relation
+    ann_ids_in_rels = set()
+    for rel in rels:
+        ann_ids_in_rels.add(rel['subject_id'])
+        ann_ids_in_rels.add(rel['object_id'])
+
+    centers = {}
+    for ann_id in ann_ids_in_rels:
+        ann = annos_by_id.get(ann_id)
+        if ann is None:
+            continue
+        cls_id = ann['category_id']
+        label = cat_by_id.get(cls_id, str(cls_id))
+        x, y, w, h = ann['bbox']
+        bbox = [x, y, x + w, y + h]
+        cx, cy = _draw_bbox_cv2(img, bbox, label, cls_id)
+        centers[ann_id] = (cx, cy)
+
+    # Draw relations
+    labels = []
+    for rel in rels:
+        s_id, o_id = rel['subject_id'], rel['object_id']
+        if s_id not in centers or o_id not in centers:
+            continue
+        pred_label = rel_cat_by_id.get(rel['predicate_id'], str(rel['predicate_id']))
+        p1, p2 = centers[s_id], centers[o_id]
+
+        s_label = cat_by_id.get(annos_by_id[s_id]['category_id'], '?')
+        o_label = cat_by_id.get(annos_by_id[o_id]['category_id'], '?')
+        labels.append([s_label, pred_label, o_label])
+
+        dist = np.hypot(p1[0] - p2[0], p1[1] - p2[1])
+        if dist > 40:
+            alpha = 20.0 / (dist + 1e-6)
+            p1s = (int(p1[0] * (1 - alpha) + p2[0] * alpha),
+                   int(p1[1] * (1 - alpha) + p2[1] * alpha))
+            p2s = (int(p2[0] * (1 - alpha) + p1[0] * alpha),
+                   int(p2[1] * (1 - alpha) + p1[1] * alpha))
+            # Orange glow + white line
+            cv2.line(img, p1s, p2s, (255, 128, 0), 2, cv2.LINE_AA)
+            cv2.line(img, p1s, p2s, (255, 255, 255), 1, cv2.LINE_AA)
+            # Arrowhead pointing toward object
+            angle = np.arctan2(p1s[1] - p2s[1], p1s[0] - p2s[0])
+            for da in (0.5, -0.5):
+                tip = (int(p2s[0] + 8 * np.cos(angle + da)),
+                       int(p2s[1] + 8 * np.sin(angle + da)))
+                cv2.line(img, p2s, tip, (255, 255, 255), 1, cv2.LINE_AA)
+            # Predicate label at 1/3 from subject toward object
+            mid = (int(p1[0] * 0.65 + p2[0] * 0.35),
+                   int(p1[1] * 0.65 + p2[1] * 0.35))
+            (tw, th), _ = cv2.getTextSize(pred_label, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)
+            cv2.rectangle(img, (mid[0] - 2, mid[1] - th - 2),
+                          (mid[0] + tw + 2, mid[1] + 2), (20, 20, 20), -1)
+            cv2.putText(img, pred_label, (mid[0], mid[1] - 1),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
+
+    print('Relations:')
+    print(', '.join('{} {} {}'.format(*t) for t in labels))
+
+    plt.figure(figsize=(12, 8))
+    plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    plt.axis('off')
+    plt.tight_layout()
+    plt.show()
+
 
 def make_alias_dict(dict_file):
     """create an alias dictionary from a file"""

@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
+import importlib.util
 import os
 from pathlib import Path
 import bisect
@@ -40,24 +41,44 @@ def _get_default_data_dir(ds_name: str, ds_type: str) -> str:
 
 
 def _resolve_path(p: str) -> str:
-    """Return an absolute path, resolving relative paths against the project root."""
+    """Return an absolute path, resolving relative paths.
+
+    Resolution order (first existing path wins):
+    1. Current working directory  — natural when the user runs scripts from the
+       project root, e.g. ``python tools/train.py`` from ``/home/user/SGG-Benchmark``.
+    2. ``_PROJECT_ROOT``           — derived from this file's installed location;
+       correct when the two coincide, but can diverge after the project is moved.
+    """
     if not p:
         return p
     if os.path.isabs(p):
         return p
+    cwd_candidate = os.path.join(os.getcwd(), p)
+    if os.path.exists(cwd_candidate):
+        return cwd_candidate
     return str(_PROJECT_ROOT / p)
 
 
 def _auto_download(ds_name: str, output_dir: str) -> None:
-    """Download *ds_name* from HuggingFace Hub."""
+    """Download *ds_name* from HuggingFace Hub using tools/download_from_hub.py."""
     try:
         logger = logging.getLogger(__name__)
     except Exception:
         logger = logging.getLogger("sgg_benchmark")
 
+    hub_script = _PROJECT_ROOT / "tools" / "download_from_hub.py"
+    if not hub_script.exists():
+        raise RuntimeError(
+            f"Dataset '{ds_name}' not found at '{output_dir}' and the download "
+            f"script was not found at '{hub_script}'.\n"
+            f"Please run:  python tools/download_from_hub.py --dataset {ds_name}"
+        )
+
     logger.info(f"Auto-downloading '{ds_name}' from HuggingFace Hub → {output_dir} …")
-    from .datasets.download import download_dataset
-    download_dataset(ds_name, output_dir=Path(output_dir), save_images=True)
+    spec = importlib.util.spec_from_file_location("download_from_hub", hub_script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.download_dataset(ds_name, output_dir=Path(output_dir), save_images=False)
 
 
 def _cfg_to_dict(cfg):

@@ -14,7 +14,6 @@ from sgg_benchmark.structures.box_ops import (
     filter_instances
 )
 from tqdm import tqdm
-from .sg_utils import box_filter, bbox_overlaps
 
 class PSGDataset(torch.utils.data.Dataset):
     def __init__(
@@ -140,7 +139,9 @@ class PSGDataset(torch.utils.data.Dataset):
         img_path = self.img_prefix + '/' + self.img_ids[index]
         
         img = cv2.imread(img_path)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # NOTE: do NOT convert BGR→RGB here — ToTensorYOLO (via LetterBox pipeline)
+        # already flips channels with [::-1], so the model receives correct RGB input.
+        # An extra cvtColor here would double-flip the channels, feeding BGR to the backbone.
 
         target = self.get_groundtruth(index)
 
@@ -335,3 +336,38 @@ class PSGDataset(torch.utils.data.Dataset):
                     triplet_freq[triplet] = freq
 
         return fg_matrix, bg_matrix, predicate_new_order, predicate_new_order_count, pred_freq, triplet_freq, pred_weights
+
+def box_filter(boxes, must_overlap=False):
+    """ Only include boxes that overlap as possible relations. 
+    If no overlapping boxes, use all of them."""
+
+    overlaps = bbox_overlaps(boxes.astype(float), boxes.astype(float), to_move=0) > 0
+    np.fill_diagonal(overlaps, 0)
+
+    all_possib = np.ones_like(overlaps, dtype=bool)
+    np.fill_diagonal(all_possib, 0)
+
+    if must_overlap:
+        possible_boxes = np.column_stack(np.where(overlaps))
+
+        if possible_boxes.size == 0:
+            possible_boxes = np.column_stack(np.where(all_possib))
+    else:
+        possible_boxes = np.column_stack(np.where(all_possib))
+    return possible_boxes
+
+def bbox_overlaps(boxes1, boxes2, to_move=1):
+    """
+    boxes1 : numpy, [num_obj, 4] (x1,y1,x2,y2)
+    boxes2 : numpy, [num_obj, 4] (x1,y1,x2,y2)
+    """
+
+    num_box1 = boxes1.shape[0]
+    num_box2 = boxes2.shape[0]
+    lt = np.maximum(boxes1.reshape([num_box1, 1, -1])[:,:,:2], boxes2.reshape([1, num_box2, -1])[:,:,:2]) # [N,M,2]
+    rb = np.minimum(boxes1.reshape([num_box1, 1, -1])[:,:,2:], boxes2.reshape([1, num_box2, -1])[:,:,2:]) # [N,M,2]
+
+    wh = (rb - lt + to_move).clip(min=0)  # [N,M,2]
+    inter = wh[:, :, 0] * wh[:, :, 1]  # [N,M]
+
+    return inter
