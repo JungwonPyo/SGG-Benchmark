@@ -282,47 +282,11 @@ class SGG_Model(object):
 
         # Precompute class labels and centers
         bbox_labels = [self.stats['obj_classes'][int(b[5])] for b in bboxes]
-<<<<<<< HEAD
-        color = self.obj_class_colors[-1]
-        
-        for s, o, r, _ in rels:
-            s,o,r = int(s), int(o), int(r)
-            # if len(bboxes[0]) > 6:
-            #     subj = f"{bboxes[s][6]}_{bbox_labels[s]}"
-            #     obj = f"{bboxes[o][6]}_{bbox_labels[o]}"
-            # else:
-            #     subj = bbox_labels[s]
-            #     obj = bbox_labels[o]
-            
-            subj = bbox_labels[s]
-            obj = bbox_labels[o]
-        
-            #color = self.obj_class_colors[int(bboxes[s][5])]
-
-            c_sub = self.draw_bbox(img, bboxes[s][:4], subj)
-            c_obj = self.draw_bbox(img, bboxes[o][:4], obj)
-        
-            # Draw the relation between center of sub c_sub and center of obj c_obj
-            cv2.line(img, c_sub, c_obj, color, 2)
-        
-            r_label = self.stats['rel_classes'][r]
-            font_scale = 0.5
-
-            # get text size
-            (text_width, text_height), baseline = cv2.getTextSize(r_label, cv2.FONT_HERSHEY_COMPLEX, font_scale, 1)
-            # Draw background
-            rect_start = ((c_sub[0] + c_obj[0]) // 2-2, ((c_sub[1] + c_obj[1]) // 2) - text_height - 2 * self.text_padding)
-            rect_end = ((c_sub[0] + c_obj[0]) // 2 + text_width + 2 * self.text_padding, (c_sub[1] + c_obj[1]) // 2)
-
-            # draw a rectange with rounded corners
-            self.draw_rounded_rectangle(img, rect_start, rect_end, color, cv2.FILLED, 5)
-=======
         centers = []
         for i, bbox in enumerate(bboxes):
             label_text = bbox_labels[i]
             if len(bbox) > 6:
                 label_text = f"{int(bbox[6])}_{label_text}"
->>>>>>> upstream/main
             
             c = self.draw_bbox(img, bbox[:4], label_text, int(bbox[5]))
             centers.append(c)

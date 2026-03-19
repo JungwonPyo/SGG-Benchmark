@@ -25,4 +25,10 @@ python demo/webcam_demo.py --config checkpoints/react_final/config.yml --weights
 python demo/webcam_demo.py --config checkpoints/react_PSG/config.yml --weights checkpoints/react_PSG/best_model_epoch_11.pth --tracking
 ```
 
+```
+python demo/webcam_demo_onnx.py \
+    --onnx  checkpoints/PSG/react++_yolo12m/yolo12m/react_pp_yolo12m.onnx \
+    --rel_conf 0.05 --box_conf 0.4
+```
+
 You can also use the [SGDET_on_custom_images.ipynb](SGDET_on_custom_images.ipynb) notebook to visualize detections on images.
