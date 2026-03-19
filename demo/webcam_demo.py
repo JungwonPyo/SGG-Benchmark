@@ -21,7 +21,7 @@ def main(args):
     model = SGG_Model(config_path, weights, dcs=dcs, tracking=tracking, rel_conf=rel_conf, box_conf=box_conf)
 
     # Open the webcam
-    cap = cv2.VideoCapture(-1)
+    cap = cv2.VideoCapture(0)
 
     if save_path is not None:
         save_path = os.path.join(get_path(), save_path)
@@ -36,7 +36,6 @@ def main(args):
         # Make prediction
         img, graph = model.predict(frame, visu_type=visu_type)
 
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         if visu_type == 'image':
             graph = cv2.cvtColor(graph, cv2.COLOR_BGR2RGB)
             cv2.imshow('Graph', graph)
@@ -71,8 +70,8 @@ if __name__ == "__main__":
     parser.add_argument('--weights', type=str, required=True, help='Path to the weights file, e.g. model.pth')
     parser.add_argument('--classes', default="datasets/vg/VG-SGG-dicts-with-attri.json", type=str, help='Path to the classes dict file, e.g. VG-SGG-dicts.json')
     parser.add_argument('--tracking', action="store_true", help='Object tracking or not')
-    parser.add_argument('--rel_conf', type=float, default=0.01, help='Relation confidence threshold')
-    parser.add_argument('--box_conf', type=float, default=0.25, help='Box confidence threshold')
+    parser.add_argument('--rel_conf', type=float, default=0.1, help='Relation triplet-score threshold (geometric mean of rel×subj×obj)')
+    parser.add_argument('--box_conf', type=float, default=0.1, help='Box confidence threshold')
 
     parser.add_argument('--dcs', type=int, default=100, help='Dynamic Candidate Selection')
 
@@ -95,7 +94,7 @@ if __name__ == "__main__":
 
 # Run the demo
 '''
-python demo/webcam_demo.py --config checkpoints/PSG/SGDET/M-PE-NET-yolov8m/config.yml --weights checkpoints/PSG/SGDET/M-PE-NET-yolov8m/best_model_epoch_9.pth --dcs 42 --tracking --save_path ./output.avi
+python demo/webcam_demo.py --config /home/maelicneau/Documents/SGG-Benchmark/output/test_transformer2/config.yml --weights /home/maelicneau/Documents/SGG-Benchmark/output/test_transformer2/best_model_epoch_70.pth --dcs 42 --tracking --save_path ./output.avi
 
 python demo/webcam_demo.py --config checkpoints/PSG/SGDET/penet-faster_rcnn/config.yml --weights checkpoints/PSG/SGDET/penet-faster_rcnn/best_model_epoch_1.pth --dcs 52 --tracking
 

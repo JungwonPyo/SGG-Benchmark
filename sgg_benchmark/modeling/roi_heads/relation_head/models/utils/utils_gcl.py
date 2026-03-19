@@ -14,9 +14,9 @@ class FrequencyBias_GCL(nn.Module):
     def __init__(self, cfg, statistics, eps=1e-3, predicate_all_list=None):
         super(FrequencyBias_GCL, self).__init__()
         assert predicate_all_list is not None
-        self.num_obj_cls = cfg.MODEL.ROI_BOX_HEAD.NUM_CLASSES
+        self.num_obj_cls = cfg.model.roi_box_head.num_classes
 
-        # self.num_obj_cls = cfg.MODEL.ROI_BOX_HEAD.NUM_CLASSES
+    # self.num_obj_cls = cfg.model.roi_box_head.num_classes
         self.num_rel_cls = max(predicate_all_list) + 1
         old_matrix = statistics['fg_matrix'].float()
 

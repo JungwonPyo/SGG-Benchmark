@@ -20,13 +20,13 @@ class REACTPredictor(BasePredictor):
         super().__init__(config, in_channels)        
 
         self.num_obj_classes = len(self.obj_classes)
-        dropout_p = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_DROPOUT_RATE
+        dropout_p = self.cfg.model.roi_relation_head.context_dropout_rate
 
-        self.mlp_dim = self.cfg.MODEL.ROI_RELATION_HEAD.MLP_HEAD_DIM
-        self.embed_dim = self.cfg.MODEL.ROI_RELATION_HEAD.EMBED_DIM
+        self.mlp_dim = self.cfg.model.roi_relation_head.mlp_head_dim
+        self.embed_dim = self.cfg.model.roi_relation_head.embed_dim
 
-        self.use_union = self.cfg.MODEL.ROI_RELATION_HEAD.USE_UNION_FEATURES or self.cfg.MODEL.ROI_RELATION_HEAD.USE_SPATIAL_FEATURES
-        self.text_only = self.cfg.MODEL.ROI_RELATION_HEAD.TEXTUAL_FEATURES_ONLY
+        self.use_union = self.cfg.model.roi_relation_head.use_union_features or self.cfg.model.roi_relation_head.use_spatial_features
+        self.text_only = self.cfg.model.roi_relation_head.textual_features_only
 
         self.post_emb = nn.Linear(in_channels, self.mlp_dim * 2) 
 
@@ -65,13 +65,13 @@ class REACTPredictor(BasePredictor):
 
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
-        obj_embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=self.embed_dim)  # load Glove for objects
-        rel_embed_vecs = rel_vectors(self.rel_classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=config.GLOVE_DIR, wv_dim=self.embed_dim)   # load Glove for predicates
+        obj_embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=self.embed_dim)  # load Glove for objects
+        rel_embed_vecs = rel_vectors(self.rel_classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=self.embed_dim)   # load Glove for predicates
         
         self.rel_embed = nn.Embedding(self.num_rel_cls, self.embed_dim)
         self.obj_embed = nn.Embedding(self.num_obj_cls, self.embed_dim)
 
-        self.obj_decode = not (self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX or self.cfg.MODEL.BACKBONE.FREEZE)
+        self.obj_decode = False #not (self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX or self.cfg.MODEL.BACKBONE.FREEZE)
 
         if self.obj_decode:
             ##### refine object labels
@@ -110,7 +110,7 @@ class REACTPredictor(BasePredictor):
         entity_embeds = self.obj_embed(entity_preds) # obtaining the word embedding of entities with GloVe 
 
         num_rels = [r.shape[0] for r in rel_pair_idxs]
-        num_objs = [len(b) for b in proposals]
+        num_objs = [len(b["boxes"]) for b in proposals]
 
         sub_reps = sub_rep.split(num_objs, dim=0)
         obj_reps = obj_rep.split(num_objs, dim=0)
@@ -216,7 +216,7 @@ class REACTPredictor(BasePredictor):
         entity_embeds = self.obj_embed(entity_preds) # obtaining the word embedding of entities with GloVe 
 
         num_rels = [r.shape[0] for r in rel_pair_idxs]
-        num_objs = [len(b) for b in proposals]
+        num_objs = [len(b["boxes"]) for b in proposals]
 
         entity_preds = entity_preds.split(num_objs, dim=0)
         entity_embeds = entity_embeds.split(num_objs, dim=0)
@@ -290,7 +290,7 @@ class REACTPredictor(BasePredictor):
         return entity_dists, rel_dists, add_losses
     
     def encode_obj_labels(self, proposals):
-        obj_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
+        obj_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
         obj_labels = obj_labels.long()
         obj_dists = to_onehot(obj_labels, self.num_obj_classes)
         return obj_dists, obj_labels
@@ -300,19 +300,19 @@ class REACTPredictor(BasePredictor):
         pos_embed = self.pos_embed(encode_box_info(proposals))
 
         # label/logits embedding will be used as input
-        obj_logits = cat([proposal.get_field("predict_logits") for proposal in proposals], dim=0).detach()
+        obj_logits = cat([proposal["predict_logits"] for proposal in proposals], dim=0).detach()
         obj_embed = F.softmax(obj_logits, dim=1) @ self.obj_embed.weight
 
-        assert proposals[0].mode == 'xyxy'
+        assert proposals[0]["mode"] == 'xyxy'
 
         pos_embed = self.pos_embed(encode_box_info(proposals))
-        num_objs = [len(p) for p in proposals]
+        num_objs = [len(p["boxes"]) for p in proposals]
         obj_pre_rep_for_pred = self.lin_obj_cyx(cat([roi_features, obj_embed, pos_embed], -1))
 
         obj_dists = self.out_obj(obj_pre_rep_for_pred)
         use_decoder_nms = not self.training
         if use_decoder_nms:
-            boxes_per_cls = [proposal.get_field('boxes_per_cls') for proposal in proposals]
+            boxes_per_cls = [proposal['boxes_per_cls'] for proposal in proposals]
             obj_preds = nms_per_cls(obj_dists, boxes_per_cls, num_objs, self.nms_thresh).long()
         else:
             obj_preds = (obj_dists[:, 1:].max(1)[1] + 1).long()

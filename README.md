@@ -3,7 +3,9 @@
 [![LICENSE](https://img.shields.io/badge/license-MIT-green)](https://github.com/KaihuaTang/Scene-Graph-Benchmark.pytorch/blob/master/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/)
 ![PyTorch](https://img.shields.io/badge/pytorch-2.2.1-%237732a8)
-[![arXiv](https://img.shields.io/badge/arXiv-2405.16116-b31b1b.svg)](https://arxiv.org/abs/2405.16116)
+[![arXiv](https://img.shields.io/badge/arXiv-2405.16116-b31b1b.svg)](https://arxiv.org/abs/2603.06386)
+
+## [Under Review] Code for the paper [REACT++: Efficient Cross-Attention for Real-Time Scene Graph Generation](https://arxiv.org/abs/2603.06386)
 
 ## [BMVC 2025] Code for the paper [REACT: Real-time Efficiency and Accuracy Compromise for Tradeoffs in Scene Graph Generation](https://arxiv.org/abs/2405.16116)
 
@@ -11,28 +13,70 @@ Previous work (PE-NET model) | Our REACT model for Real-Time SGG
 :-: | :-:
 <video src='https://github.com/user-attachments/assets/1e580ecc-6a31-409c-82b5-4488aadaf815' width=480/> | <video src='https://github.com/user-attachments/assets/6dfc22de-176a-4d50-9e3a-e91d8df76777' width=480/>
 
+REACT++ versus previous work | The REACT++ family
+:-: | :-:
+<img alt="latency_vs_f1_psg" src="https://github.com/user-attachments/assets/81b27eaa-5e82-4401-a942-edd2e6c75422" width="480"/> | <img alt="react_pp_onnx_tradeoff" src="https://github.com/user-attachments/assets/8c7fd3ad-3750-4702-8b1b-9b97f6831108" width="480"/>
 
-Our paper [REACT: Real-time Efficiency and Accuracy Compromise for Tradeoffs in Scene
-Graph Generation](https://arxiv.org/abs/2405.16116) has been accepted at BMVC 2025! We dive into current bottlenecks of SGG models for real-time constraints and propose a simple yet very efficient implementation using YOLOV8/9/10/11/12. Weights are available [here](docs/MODEL_ZOO.md).
-Here is a snapshot of the main results:
+## Very Quick Start 🚀
 
-<p align="center">
-<img src="https://github.com/user-attachments/assets/5335b285-e54b-4d79-88f1-5f4a4ef6aab4" alt="intro_img" width="1080"/>
-</p>
+If you don't want to install the codebase, we provide a minimal running example with ONNX Runtime under [demo/standalone_onnx_demo.py](demo/standalone_onnx_demo.py) that you can run with a single command after downloading an onnx model from the [MODEL_ZOO.md](docs/MODEL_ZOO.md):
 
+```bash
+# You need to have CUDA and cudnn installed for GPU inference with the onnxruntime-gpu package.
+pip install onnxruntime-gpu opencv-python numpy
+python demo/standalone_onnx_demo.py \
+    --onnx checkpoints/PSG/react++_yolo12m/model.onnx \
+    --rel_conf 0.05 --box_conf 0.4
+```
+
+## Quick Start 🚀
+
+1. Install
+```bash
+chmod +x scripts/install_uv.sh
+./scripts/install_uv.sh
+source .venv/bin/activate
+```
+
+2. Pick a model from [MODEL_ZOO.md](docs/MODEL_ZOO.md) and download it using 🤗 huggingface:
+```bash
+# Example: REACT++ PSG YOLOv12m (best accuracy/speed trade-off)
+hf download maelic/REACTPlusPlus_PSG yolo12m/react_pp_yolo12m.onnx \
+    --repo-type model --local-dir checkpoints/PSG/react++_yolo12m
+```
+
+3. Run inference with a webcam demo
+```bash
+python demo/webcam_demo_onnx.py \
+    --onnx  checkpoints/PSG/react++_yolo12m/yolo12m/react_pp_yolo12m.onnx \
+    --rel_conf 0.05 --box_conf 0.4
+```
+
+Check the [demo](demo/) folder for more demos and details.
+
+## [NEW] FULL TUTORIAL 🚀 
+
+### We now provide a full notebook tutorial on how to train/test/deploy your own SGG model! Please check it out:
+
+[TUTORIAL.ipynb](docs/TUTORIAL.ipynb)
+
+<!-- 
 ## Background
 
 This implementation is a new benchmark for the task of Scene Graph Generation, based on a fork of the [SGG Benchmark by Kaihua Tang](https://github.com/KaihuaTang/Scene-Graph-Benchmark.pytorch). The implementation by Kaihua is a good starting point however it is very outdated and is missing a lot of new development for the task.
 My goal with this new codebase is to provide an up-to-date and easy-to-run implementation of common approaches in the field of Scene Graph Generation. 
 This codebase also focuses on real-time and real-world usage of Scene Graph Generation with dedicated dataset tools and a large choice of object detection backbones.
-This codebase is actually a work-in-progress, do not expect everything to work properly on the first run. If you find any bugs, please feel free to post an issue or contribute with a PR.
+This codebase is actually a work-in-progress, do not expect everything to work properly on the first run. If you find any bugs, please feel free to post an issue or contribute with a PR. -->
 
 ## Recent Updates
 
+- [X] 09/03/2026: **REACT++ released!** New YOLO12m-based model with improved accuracy and ONNX export for ~2× faster inference (13.4ms). See [MODEL_ZOO.md](docs/MODEL_ZOO.md) for weights and results.
+- [X] 09/03/2026:  🤗 As an effort to push the open-source community in SGG we are releasing the PSG, VG150 and IndoorVG datasets on the huggingface hub! Please see [DATASET.md](docs/DATASET.md) for more details.
+- [X] 09/03/2026: The codebase now support YOLO26, the new YOLO release from [ultralytics](https://github.com/ultralytics/ultralytics).
 - [X] 15/08/2025: I have created a new tool to annotate your own SGG dataset with visual relationships, please check it out: [SGG-Annotate](https://github.com/Maelic/SGG-Annotate). More info in [ANNOTATIONS.md](docs/ANNOTATIONS.md).
 - [X] 31.07.2025: REACT has been accepted at the BMVC 2025 conference!
 - [X] 26.05.2025: I have added some explanation for two new metrics: InformativeRecall@K and Recall@K Relative. InformativeRecall@K is defined in [Mining Informativeness in Scene Graphs](https://www.sciencedirect.com/science/article/pii/S016786552500008X) and can help to measure the pertinence and robustness of models for real-world applications. Please check the [METRICS.md](docs/METRICS.md) file for more information.
-- [X] 26.05.2025: The codebase now supports also YOLOV12, see [configs/VG150/react_yolov12m.yaml](configs/VG150/react_yolov12m.yaml).
+- [X] 26.05.2025: The codebase now supports also YOLOV12, see [configs/hydra/VG/REACT++.yaml](configs/hydra/VG/REACT++.yaml).
 - [X] 04.12.2024: Official release of the REACT model weights for VG150, please see [MODEL_ZOO.md](docs/MODEL_ZOO.md)
 - [X] 03.12.2024: Official release of the [REACT model](https://arxiv.org/abs/2405.16116)
 - [X] 23.05.2024: Added support for Hyperparameters Tuning with the RayTune library, please check it out: [Hyperparameters Tuning](#hyperparameters-tuning)
@@ -46,24 +90,17 @@ This codebase is actually a work-in-progress, do not expect everything to work p
 
 ## Contents
 
-1. [Overview](#Overview)
-2. [Install the Requirements](docs/INSTALL.md)
-3. [Prepare the Dataset](docs/DATASET.md)
-4. [Simple Webcam Demo](#demo)
-5. [Supported Models](#supported-models)
-6. [Metrics and Results for our Toolkit](docs/METRICS.md)
-    - [Explanation of R@K, mR@K, zR@K, ng-R@K, ng-mR@K, ng-zR@K, A@K, S2G](docs/METRICS.md#explanation-of-our-metrics)
-    - [Output Format](docs/METRICS.md#output-format-of-our-code)
-    - [Reported Results](docs/METRICS.md#reported-results)
-7. [Training on Scene Graph Generation](#perform-training-on-scene-graph-generation)
-8. [Hyperparameters Tuning](#hyperparameters-tuning)
-9. [Evaluation on Scene Graph Generation](#Evaluation)
-<!-- 9. [**Detect Scene Graphs on Your Custom Images** :star2:](#SGDet-on-custom-images) -->
-<!-- 10. [**Visualize Detected Scene Graphs of Custom Images** :star2:](#Visualize-Detected-SGs-of-Custom-Images) -->
-10. [Other Options that May Improve the SGG](#other-options-that-may-improve-the-SGG)
-<!-- 11. [Tips and Tricks for TDE on any Unbiased Task](#tips-and-Tricks-for-any-unbiased-taskX-from-biased-training) -->
-11. [Frequently Asked Questions](#frequently-asked-questions)
-12. [Citations](#Citations)
+1. [Quick Start](#quick-start-)
+2. [Full Tutorial Notebook](#full-tutorial-)
+3. [Installation](docs/INSTALL.md)
+4. [Datasets Preparation](docs/DATASET.md)
+5. [Model Zoo & Weights](docs/MODEL_ZOO.md)
+6. [Supported Models & Backbones](#supported-models)
+7. [Metrics and Results](docs/METRICS.md)
+8. [Training Instructions](#perform-training-on-scene-graph-generation)
+9. [Hyperparameters Tuning](#hyperparameters-tuning)
+10. [Evaluation Instructions](#evaluation)
+11. [Citations](#citations)
 
 <!-- ## Overview
 
@@ -79,14 +116,6 @@ Check [INSTALL.md](docs/INSTALL.md) for installation instructions.
 
 Check [DATASET.md](docs/DATASET.md) for instructions regarding dataset preprocessing, including how to create your own dataset with [SGG-Annotate](https://github.com/Maelic/SGG-Annotate).
 
-## DEMO
-
-You can [download a pre-train model](docs/MODEL_ZOO.md) or [train your own model](#perform-training-on-scene-graph-generation) and run my off-the-shelf demo!
-
-You can use the [SGDET_on_custom_images.ipynb](demo/SGDET_on_custom_images.ipynb) notebook to visualize detections on images.
-
-I also made a demo code to try SGDET with your webcam in the [demo folder](./demo/README.md), feel free to have a look!
-
 ## Supported Models
 
 ### Background 
@@ -101,6 +130,7 @@ We proposed different object detection backbones that can be plugged with any re
 
 :rocket: NEW! No need to train a backbone anymore, we support Yolo-World for fast and easy open-vocabulary inference. Please check it out!
 
+- [x] [YOLO26](https://docs.ultralytics.com/models/yolo26/): New yolo architecture for SOTA real-time object detection.
 - [x] [YOLO12](https://docs.ultralytics.com/models/yolo12/): New yolo architecture for SOTA real-time object detection.
 - [x] [YOLO11](https://docs.ultralytics.com/models/yolo11/): New  yolo version from Ultralytics for SOTA real-time object detection.
 - [x] [YOLOV10](https://docs.ultralytics.com/models/yolov10/): New end-to-end yolo architecture for SOTA real-time object detection.
@@ -112,6 +142,8 @@ We proposed different object detection backbones that can be plugged with any re
 ### Relation Heads
 
 We try to compiled the main approaches for relation modeling in this codebase:
+
+- [x] REACT++ (2025): [REACT++: Efficient Cross-Attention for Real-Time Scene Graph Generation](https://arxiv.org/abs/2603.06386). Improved version of REACT with a new low-cost relation head and YOLO12 as backbone. **Best results on PSG, IndoorVG and VG150.** ONNX export available for deployment at ~55 FPS. Weights at [MODEL_ZOO.md](docs/MODEL_ZOO.md).
 
 - [x] REACT (2025): [REACT: Real-time Efficiency and Accuracy Compromise for Tradeoffs in Scene Graph Generation](https://arxiv.org/abs/2405.16116)
 
@@ -152,27 +184,47 @@ We provide some of the pre-trained weights for evaluation or usage in downstream
 ## Metrics and Results **(IMPORTANT)**
 Explanation of metrics in our toolkit and reported results are given in [METRICS.md](docs/METRICS.md)
 
-<!-- ## Alternate links
+## REACT++ Quick Start
 
-Since OneDrive links might be broken in mainland China, we also provide the following alternate links for all the pretrained models and dataset annotations using BaiduNetDisk: 
+REACT++ is our best model for real-time SGG, combining the YOLO12m detector with an efficient relation head. Pretrained weights and ONNX models are available in [MODEL_ZOO.md](docs/MODEL_ZOO.md).
 
-Link：[https://pan.baidu.com/s/1oyPQBDHXMQ5Tsl0jy5OzgA](https://pan.baidu.com/s/1oyPQBDHXMQ5Tsl0jy5OzgA)
-Extraction code：1234 -->
+### Training REACT++ on PSG
+
+```bash
+python tools/relation_train_net_hydra.py --config-name PSG/REACT++ --task sgdet --save-best
+```
+
+### Evaluating REACT++ (PyTorch)
+
+```bash
+python tools/relation_eval_hydra.py --run-dir checkpoints/PSG/react++_yolo12m --task sgdet
+```
+
+### Exporting to ONNX
+
+```bash
+python tools/export_onnx.py --run-dir checkpoints/PSG/react++_yolo12m
+```
+
+### Evaluating the ONNX model on PSG
+
+This runs the full SGDet evaluation on the PSG test set using ONNX Runtime (GPU by default):
+
+```bash
+python tools/eval_onnx_psg.py --run-dir checkpoints/PSG/react++_yolo12m --provider CUDAExecutionProvider
+```
+
+Results are saved to `checkpoints/PSG/react++_yolo12m/inference_onnx/onnx_eval_summary.json`.
+
 ## YOLOV8/9/10/11/12/World Pre-training
 
 If you want to use YoloV8/9/10/11/12 or Yolo-World as a backbone instead of Faster-RCNN, you need to first train a model using the official [ultralytics implementation](https://github.com/ultralytics/ultralytics). To help you with that, I have created a [dedicated notebook](process_data/convert_to_yolo.ipynb) to generate annotations in YOLO format from a .h5 file (SGG format). 
-Once you have a model, you can modify [this config file](configs/VG150/e2e_relation_yolov8m.yaml) and change the path `PRETRAINED_DETECTOR_CKPT` to your model weights. Please note that you will also need to change the variable `SIZE` and `OUT_CHANNELS` accordingly if you use another variant of YOLO (nano, small or large for instance). 
-For training an SGG model with YOLO as a backbone, you need to modify the `META_ARCHITECTURE` variable in the same config file to `GeneralizedYOLO`. You can then follow the standard procedure for PREDCLS, SGCLS or SGDET training below.
+Once you have a model, you can modify [a config file](configs/hydra) and change the path `pretrained_detector_ckpt` to your model weights. Please note that you will also need to change the variable `yolo.size` and `yolo.out_channels` accordingly if you use another variant of YOLO (nano, small or large for instance). 
+For training an SGG model with YOLO as a backbone, you need to modify the `meta_architecture` variable in the same config file to `GeneralizedYOLO`. You can then follow the standard procedure for training below.
 
 ## Faster R-CNN pre-training (legacy)
 
-:warning: Faster-RCNN pre-training is not officially supported anymore in this codebase, please use a YOLO backbone instead (see above). Using `detector_pretrain_net.py` will NOT WORK with a YOLO backbone.
-
-The following command can be used to train your own Faster R-CNN model:
-```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.launch --master_port 10001 --nproc_per_node=4 tools/detector_pretrain_net.py --config-file "configs/e2e_relation_detector_X_101_32_8_FPN_1x.yaml" SOLVER.IMS_PER_BATCH 8 TEST.IMS_PER_BATCH 4 DTYPE "float16" SOLVER.MAX_EPOCH 20 MODEL.RELATION_ON False OUTPUT_DIR ./checkpoints/pretrained_faster_rcnn SOLVER.PRE_VAL False
-```
-where ```CUDA_VISIBLE_DEVICES``` and ```--nproc_per_node``` represent the id of GPUs and number of GPUs you use, ```--config-file``` means the config we use, where you can change other parameters. ```SOLVER.IMS_PER_BATCH``` and ```TEST.IMS_PER_BATCH``` are the training and testing batch size respectively, ```DTYPE "float16"``` enables Automatic Mixed Precision, ```OUTPUT_DIR``` is the output directory to save checkpoints and log (considering `/home/username/checkpoints/pretrained_faster_rcnn`), ```SOLVER.PRE_VAL``` means whether we conduct validation before training or not.
+We do not support Faster-RCNN pre-training anymore.
 
 ## Perform training on Scene Graph Generation
 
@@ -194,62 +246,41 @@ For **Scene Graph Detection (SGDet)**:
 ### Predefined Models
 We abstract various SGG models to be different ```relation-head predictors``` in the file ```roi_heads/relation_head/roi_relation_predictors.py```. To select our predefined models, you can use ```MODEL.ROI_RELATION_HEAD.PREDICTOR```.
 
+For [REACT++](https://arxiv.org/abs/2603.06386) Model:
+```bash
+model.roi_relation_head.predictor REACTPlusPlusPredictor
+```
+
 For [REACT](https://arxiv.org/abs/2405.16116v2) Model:
 ```bash
-MODEL.ROI_RELATION_HEAD.PREDICTOR REACTPredictor
+model.roi_relation_head.predictor  REACTPredictor
 ```
 
 For [PE-NET](https://arxiv.org/abs/2303.07096) Model:
 ```bash
-MODEL.ROI_RELATION_HEAD.PREDICTOR PrototypeEmbeddingNetwork
+model.roi_relation_head.predictor PrototypeEmbeddingNetwork
 ```
 
 For [Neural-MOTIFS](https://arxiv.org/abs/1711.06640) Model:
 ```bash
-MODEL.ROI_RELATION_HEAD.PREDICTOR MotifPredictor
+model.roi_relation_head.predictor  MotifPredictor
 ```
 For [Iterative-Message-Passing(IMP)](https://arxiv.org/abs/1701.02426) Model (Note that SOLVER.BASE_LR should be changed to 0.001 in SGCls, or the model won't converge):
 ```bash
-MODEL.ROI_RELATION_HEAD.PREDICTOR IMPPredictor
+model.roi_relation_head.predictor  IMPPredictor
 ```
 For [VCTree](https://arxiv.org/abs/1812.01880) Model:
 ```bash
-MODEL.ROI_RELATION_HEAD.PREDICTOR VCTreePredictor
+model.roi_relation_head.predictor VCTreePredictor
 ```
 For Transformer Model (Note that Transformer Model needs to change SOLVER.BASE_LR to 0.001, SOLVER.SCHEDULE.TYPE to WarmupMultiStepLR, SOLVER.MAX_ITER to 16000, SOLVER.IMS_PER_BATCH to 16, SOLVER.STEPS to (10000, 16000).), which is provided by [Jiaxin Shi](https://github.com/shijx12):
 ```bash
-MODEL.ROI_RELATION_HEAD.PREDICTOR TransformerPredictor
+model.roi_relation_head.predictor TransformerPredictor
 ```
-For [Unbiased-Causal-TDE](https://arxiv.org/abs/2002.11949) Model:
-```bash
-MODEL.ROI_RELATION_HEAD.PREDICTOR CausalAnalysisPredictor
-```
-
-The default settings are under ```configs/e2e_relation_X_101_32_8_FPN_1x.yaml``` and ```sgg_benchmark/config/defaults.py```. The priority is ```command > yaml > defaults.py```
-
-### Customize Your Own Model
-If you want to customize your own model, you can refer ```sgg_benchmark/modeling/roi_heads/relation_head/model_XXXXX.py``` and ```sgg_benchmark/modeling/roi_heads/relation_head/utils_XXXXX.py```. You also need to add the corresponding nn.Module in ```sgg_benchmark/modeling/roi_heads/relation_head/roi_relation_predictors.py```. Sometimes you may also need to change the inputs & outputs of the module through ```sgg_benchmark/modeling/roi_heads/relation_head/relation_head.py```.
-
-### The Causal TDE on [Unbiased Scene Graph Generation from Biased Training](https://arxiv.org/abs/2002.11949)
-As to the Unbiased-Causal-TDE, there are some additional parameters you need to know. ```MODEL.ROI_RELATION_HEAD.CAUSAL.EFFECT_TYPE``` is used to select the causal effect analysis type during inference(test), where "none" is original likelihood, "TDE" is total direct effect, "NIE" is natural indirect effect, "TE" is total effect. ```MODEL.ROI_RELATION_HEAD.CAUSAL.FUSION_TYPE``` has two choice "sum" or "gate". Since Unbiased Causal TDE Analysis is model-agnostic, we support [Neural-MOTIFS](https://arxiv.org/abs/1711.06640), [VCTree](https://arxiv.org/abs/1812.01880) and [VTransE](https://arxiv.org/abs/1702.08319). ```MODEL.ROI_RELATION_HEAD.CAUSAL.CONTEXT_LAYER``` is used to select these models for Unbiased Causal Analysis, which has three choices: motifs, vctree, vtranse.
-
-Note that during training, we always set ```MODEL.ROI_RELATION_HEAD.CAUSAL.EFFECT_TYPE``` to be 'none', because causal effect analysis is only applicable to the inference/test phase.
 
 ### Examples of the Training Command
 
-**NEW: I replaced the training by iteration (steps) with training by epochs (iteration on the whole dataset), controlling the training loop by iteration is still possible but it's made easier by epochs imo, you can try with the argument `SOLVER.MAX_EPOCH` (see below)** 
-
-By default, only the last checkpoint will be saved which is not very efficient. You can choose to save only the best checkpoint instead with the argument ```--save-best```.
-Training Example 1 : (PreCls, Motif Model)
-```bash
-CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --master_port 10025 --nproc_per_node=2 tools/relation_train_net.py --task predcls --save-best --config-file "configs/e2e_relation_X_101_32_8_FPN_1x.yaml" MODEL.ROI_RELATION_HEAD.PREDICTOR MotifPredictor SOLVER.IMS_PER_BATCH 12 TEST.IMS_PER_BATCH 2 DTYPE "float16" SOLVER.MAX_EPOCH 20 MODEL.PRETRAINED_DETECTOR_CKPT ./checkpoints/pretrained_faster_rcnn/model_final.pth OUTPUT_DIR ./checkpoints/motif-precls-exmp
-```
-where ```MODEL.PRETRAINED_DETECTOR_CKPT``` is the pretrained Faster R-CNN model you want to load, ```OUTPUT_DIR``` is the output directory used to save checkpoints and the log. Since we use the ```WarmupReduceLROnPlateau``` as the learning scheduler for SGG, ```SOLVER.STEPS``` is not required anymore.
-
-Training Example 2 : (SGCls, Causal, **TDE**, SUM Fusion, MOTIFS Model)
-```bash
-CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --master_port 10026 --nproc_per_node=2 tools/relation_train_net.py --task sgcls --save-best  --config-file "configs/e2e_relation_X_101_32_8_FPN_1x.yaml" MODEL.ROI_RELATION_HEAD.PREDICTOR CausalAnalysisPredictor MODEL.ROI_RELATION_HEAD.CAUSAL.EFFECT_TYPE none MODEL.ROI_RELATION_HEAD.CAUSAL.FUSION_TYPE sum MODEL.ROI_RELATION_HEAD.CAUSAL.CONTEXT_LAYER motifs  SOLVER.IMS_PER_BATCH 12 TEST.IMS_PER_BATCH 2 DTYPE "float16" SOLVER.MAX_EPOCH 20 MODEL.PRETRAINED_DETECTOR_CKPT ./checkpoints/pretrained_faster_rcnn/model_final.pth OUTPUT_DIR ./checkpoints/causal-motifs-sgcls-exmp
-```
+> **Recommended approach**: Use the Hydra-based training script `tools/relation_train_net_hydra.py` with configs from `configs/hydra/`. See the [REACT++ Quick Start](#react-quick-start) section for an example.
 
 ## Hyperparameters Tuning
 
@@ -261,7 +292,7 @@ We provide a training loop for hyperparameters tuning in [hyper_param_tuning.py]
 To launch the script, do as follow:
 
 ```
-CUDA_VISIBLE_DEVICES=0 python tools/hyper_param_tuning.py --save-best --task sgdet --config-file "./configs/IndoorVG/e2e_relation_yolov10.yaml" MODEL.ROI_RELATION_HEAD.PREDICTOR PrototypeEmbeddingNetwork DTYPE "float16" SOLVER.PRE_VAL True GLOVE_DIR /home/maelic/glove OUTPUT_DIR ./checkpoints/IndoorVG4/SGDET/penet-yolov10m SOLVER.IMS_PER_BATCH 8
+CUDA_VISIBLE_DEVICES=0 python tools/hyper_param_tuning.py --save-best --task sgdet --config-file "./configs/hydra/IndoorVG/REACT++.yaml"
 ```
 
 The config and OUTPUT_DIR paths need to be absolute to allow faster loading. A lot of terminal outputs are disabled by default during tuning, using the ```cfg.VERBOSE``` variable.
@@ -273,62 +304,37 @@ tensorboard --logdir=./ray_results/train_relation_net_2024-06-23_15-28-01
 
 ## Evaluation
 
-### Examples of the Test Command
-Test Example 1 : (PreCls, Motif Model)
+### Recommended Approach (Hydra-based)
+
+For REACT++ and any model trained with the Hydra pipeline, evaluation is done with `tools/relation_eval_hydra.py` by pointing it at a checkpoint directory:
+
 ```bash
-CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --master_port 10027 --nproc_per_node=1 tools/relation_test_net.py --config-file "configs/e2e_relation_X_101_32_8_FPN_1x.yaml" MODEL.ROI_RELATION_HEAD.USE_GT_BOX True MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL True MODEL.ROI_RELATION_HEAD.PREDICTOR MotifPredictor TEST.IMS_PER_BATCH 1 DTYPE "float16" GLOVE_DIR /home/kaihua/glove MODEL.PRETRAINED_DETECTOR_CKPT /home/kaihua/checkpoints/motif-precls-exmp OUTPUT_DIR /home/kaihua/checkpoints/motif-precls-exmp
+# SGDet evaluation (PSG)
+python tools/relation_eval_hydra.py --run-dir checkpoints/PSG/react++_yolo12m --task sgdet
+
+# SGDet evaluation with a specific checkpoint
+python tools/relation_eval_hydra.py --run-dir checkpoints/PSG/react++_yolo12m --task sgdet --checkpoint best_model_epoch_9.pth
 ```
 
-Test Example 2 : (SGCls, Causal, **TDE**, SUM Fusion, MOTIFS Model)
-```bash
-CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --master_port 10028 --nproc_per_node=1 tools/relation_test_net.py --config-file "configs/e2e_relation_X_101_32_8_FPN_1x.yaml" MODEL.ROI_RELATION_HEAD.USE_GT_BOX True MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL False MODEL.ROI_RELATION_HEAD.PREDICTOR CausalAnalysisPredictor MODEL.ROI_RELATION_HEAD.CAUSAL.EFFECT_TYPE TDE MODEL.ROI_RELATION_HEAD.CAUSAL.FUSION_TYPE sum MODEL.ROI_RELATION_HEAD.CAUSAL.CONTEXT_LAYER motifs  TEST.IMS_PER_BATCH 1 DTYPE "float16" GLOVE_DIR /home/kaihua/glove MODEL.PRETRAINED_DETECTOR_CKPT /home/kaihua/checkpoints/causal-motifs-sgcls-exmp OUTPUT_DIR /home/kaihua/checkpoints/causal-motifs-sgcls-exmp
-```
-
-<!-- ## SGDet on Custom Images
-Note that evaluation on custum images is only applicable for SGDet model, because PredCls and SGCls model requires additional ground-truth bounding boxes information. To detect scene graphs into a json file on your own images, you need to turn on the switch TEST.CUSTUM_EVAL and give a folder path (or a json file containing a list of image paths) that contains the custom images to TEST.CUSTUM_PATH. Only JPG files are allowed. The output will be saved as custom_prediction.json in the given DETECTED_SGG_DIR.
-
-Test Example 1 : (SGDet, **Causal TDE**, MOTIFS Model, SUM Fusion) [(checkpoint)](https://1drv.ms/u/s!AmRLLNf6bzcir9x7OYb6sKBlzoXuYA?e=s3Y602)
-```bash
-CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --master_port 10027 --nproc_per_node=1 tools/relation_test_net.py --config-file "configs/e2e_relation_X_101_32_8_FPN_1x.yaml" MODEL.ROI_RELATION_HEAD.USE_GT_BOX False MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL False MODEL.ROI_RELATION_HEAD.PREDICTOR CausalAnalysisPredictor MODEL.ROI_RELATION_HEAD.CAUSAL.EFFECT_TYPE TDE MODEL.ROI_RELATION_HEAD.CAUSAL.FUSION_TYPE sum MODEL.ROI_RELATION_HEAD.CAUSAL.CONTEXT_LAYER motifs TEST.IMS_PER_BATCH 1 DTYPE "float16" GLOVE_DIR /home/kaihua/glove MODEL.PRETRAINED_DETECTOR_CKPT /home/kaihua/checkpoints/causal-motifs-sgdet OUTPUT_DIR /home/kaihua/checkpoints/causal-motifs-sgdet TEST.CUSTUM_EVAL True TEST.CUSTUM_PATH /home/kaihua/checkpoints/custom_images DETECTED_SGG_DIR /home/kaihua/checkpoints/your_output_path
-```
-
-Test Example 2 : (SGDet, **Original**, MOTIFS Model, SUM Fusion) [(same checkpoint)](https://1drv.ms/u/s!AmRLLNf6bzcir9x7OYb6sKBlzoXuYA?e=s3Y602)
-```bash
-CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --master_port 10027 --nproc_per_node=1 tools/relation_test_net.py --config-file "configs/e2e_relation_X_101_32_8_FPN_1x.yaml" MODEL.ROI_RELATION_HEAD.USE_GT_BOX False MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL False MODEL.ROI_RELATION_HEAD.PREDICTOR CausalAnalysisPredictor MODEL.ROI_RELATION_HEAD.CAUSAL.EFFECT_TYPE none MODEL.ROI_RELATION_HEAD.CAUSAL.FUSION_TYPE sum MODEL.ROI_RELATION_HEAD.CAUSAL.CONTEXT_LAYER motifs TEST.IMS_PER_BATCH 1 DTYPE "float16" GLOVE_DIR /home/kaihua/glove MODEL.PRETRAINED_DETECTOR_CKPT /home/kaihua/checkpoints/causal-motifs-sgdet OUTPUT_DIR /home/kaihua/checkpoints/causal-motifs-sgdet TEST.CUSTUM_EVAL True TEST.CUSTUM_PATH /home/kaihua/checkpoints/custom_images DETECTED_SGG_DIR /home/kaihua/checkpoints/your_output_path
-```
-
-The output is a json file. For each image, the scene graph information is saved as a dictionary containing bbox(sorted), bbox_labels(sorted), bbox_scores(sorted), rel_pairs(sorted), rel_labels(sorted), rel_scores(sorted), rel_all_scores(sorted), where the last rel_all_scores give all 51 predicates probability for each pair of objects. The dataset information is saved as custom_data_info.json in the same DETECTED_SGG_DIR. -->
-
-
-## Other Options that May Improve the SGG
-
-- For some models (not all), turning on or turning off ```MODEL.ROI_RELATION_HEAD.POOLING_ALL_LEVELS``` will affect the performance of predicate prediction, e.g., turning it off will improve VCTree PredCls but not the corresponding SGCls and SGGen. For the reported results of VCTree, we simply turn it on for all three protocols like other models.
-
-- For some models (not all), a crazy fusion proposed by [Learning to Count Object](https://arxiv.org/abs/1802.05766) will significantly improves the results, which looks like ```f(x1, x2) = ReLU(x1 + x2) - (x1 - x2)**2```. It can be used to combine the subject and object features in ```roi_heads/relation_head/roi_relation_predictors.py```. For now, most of our model just concatenate them as ```torch.cat((head_rep, tail_rep), dim=-1)```.
-
-- Not to mention the hidden dimensions in the models, e.g., ```MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM```. Due to the limited time, we didn't fully explore all the settings in this project, I won't be surprised if you improve our results by simply changing one of our hyper-parameters
-
-<!-- ## Tips and Tricks for any Unbiased TaskX from Biased Training
-
-The counterfactual inference is not only applicable to SGG. Actually, my collegue [Yulei](https://github.com/yuleiniu) found that counterfactual causal inference also has significant potential in [unbiased VQA](https://arxiv.org/abs/2006.04315). We believe such an counterfactual inference can also be applied to lots of reasoning tasks with significant bias. It basically just runs the model two times (one for original output, another for the intervened output), and the later one gets the biased prior that should be subtracted from the final prediction. But there are three tips you need to bear in mind:
-- The most important things is always the causal graph. You need to find the correct causal graph with an identifiable branch that causes the biased predictions. If the causal graph is incorrect, the rest would be meaningless. Note that causal graph is not the summarization of the existing network (but the guidance to build networks), you should modify your network based on causal graph, but not vise versa. 
-- For those nodes having multiple input branches in the causal graph, it's crucial to choose the right fusion function. We tested lots of fusion funtions and only found the SUM fusion and GATE fusion consistently working well. The fusion function like element-wise production won't work for TDE analysis in most of the cases, because the causal influence from multiple branches can not be linearly separated anymore, which means, it's no longer an identifiable 'influence'.
-- For those final predictions having multiple input branches in the causal graph, it may also need to add auxiliary losses for each branch to stablize the causal influence of each independent branch. Because when these branches have different convergent speeds, those hard branches would easily be learned as unimportant tiny floatings that depend on the fastest/stablest converged branch. Auxiliary losses allow different branches to have independent and equal influences. -->
-
-## Frequently Asked Questions:
-
-1. **Q:** Fail to load the given checkpoints.
-**A:** The model to be loaded is based on the last_checkpoint file in the OUTPUT_DIR path. If you fail to load the given pretained checkpoints, it probably because the last_checkpoint file still provides the path in my workstation rather than your own path.
-
-2. **Q:** AssertionError on "assert len(fns) == 108073"
-**A:** If you are working on VG dataset, it is probably caused by the wrong DATASETS (data path) in sgg_benchmark/config/paths_catlog.py. If you are working on your custom datasets, just comment out the assertions.
-
-3. **Q:** AssertionError on "l_batch == 1" in model_motifs.py
-**A:** The original MOTIFS code only supports evaluation on 1 GPU. Since my reimplemented motifs is based on their code, I keep this assertion to make sure it won't cause any unexpected errors.
+See the [REACT++ Quick Start](#react-quick-start) section for full training/eval/ONNX export commands.
 
 ## Citations
 
 If you find this project helps your research, please kindly consider citing our project or papers in your publications.
+
+
+```
+@misc{neau2026reactplusplus,
+      title={REACT++: Efficient Cross-Attention for Real-Time Scene Graph Generation
+}, 
+      author={Maëlic Neau and Zoe Falomir},
+      year={2026},
+      eprint={2603.06386},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2603.06386}, 
+}
+```
 
 ```
 @misc{neau2024reactrealtimeefficiencyaccuracy,

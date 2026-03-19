@@ -204,8 +204,8 @@ class SquatContext(nn.Module):
         self.cfg = config
         self.hidden_dim = hidden_dim
         self.num_iter = num_iter
-        self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.NUM_CLASSES
-        self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
+        self.num_obj_cls = config.model.roi_box_head.num_classes
+        self.num_rel_cls = config.model.roi_relation_head.num_classes
         self.pairwise_feature_extractor = PairwiseFeatureExtractor(config, in_channels)
         self.pooling_dim = self.pairwise_feature_extractor.pooling_dim
 
@@ -222,9 +222,9 @@ class SquatContext(nn.Module):
             nn.ReLU()
         )
             
-        norm_first = config.MODEL.ROI_RELATION_HEAD.SQUAT_MODULE.PRE_NORM
+        norm_first = config.model.roi_relation_head.squat_module.pre_norm
         decoder_layer = P2PDecoderLayer(self.pooling_dim, 8, self.hidden_dim * 2, norm_first=norm_first)
-        num_layer = config.MODEL.ROI_RELATION_HEAD.SQUAT_MODULE.NUM_DECODER
+        num_layer = config.model.roi_relation_head.squat_module.num_decoder
         self.m2m_decoder = P2PDecoder(decoder_layer, num_layer)
         self.obj_classifier = nn.Linear(self.hidden_dim, self.num_obj_cls)
         self.rel_classifier = nn.Linear(self.pooling_dim, self.num_rel_cls)
@@ -232,8 +232,8 @@ class SquatContext(nn.Module):
         self.mask_predictor = MaskPredictor(self.pooling_dim, self.hidden_dim)
         self.mask_predictor_e2e = MaskPredictor(self.pooling_dim, self.hidden_dim)
         self.mask_predictor_n2e = MaskPredictor(self.pooling_dim, self.hidden_dim) 
-        self.rho = config.MODEL.ROI_RELATION_HEAD.SQUAT_MODULE.RHO
-        self.beta = config.MODEL.ROI_RELATION_HEAD.SQUAT_MODULE.BETA
+        self.rho = config.model.roi_relation_head.squat_module.rho
+        self.beta = config.model.roi_relation_head.squat_module.beta
 
     def set_pretrain_pre_clser_mode(self, val=True):
         self.pretrain_pre_clser_mode = val
@@ -242,14 +242,18 @@ class SquatContext(nn.Module):
         device = rel_pair_idxs[0].device
         rel_inds = []
         offset = 0
-        obj_num = sum([len(proposal) for proposal in proposals])
+        obj_num = sum([len(proposal["boxes"]) for proposal in proposals])
         obj_obj_map = torch.zeros(obj_num, obj_num)
 
         for proposal, rel_pair_idx in zip(proposals, rel_pair_idxs):
-            obj_obj_map_i = (1 - torch.eye(len(proposal))).float()
-            obj_obj_map[offset:offset + len(proposal), offset:offset + len(proposal)] = obj_obj_map_i
+            n_boxes = len(proposal["boxes"])
+            # ONNX-friendly Eye alternative for dynamic shapes
+            m = torch.arange(n_boxes, device=device)
+            eye = (m[None, :] == m[:, None]).float().cpu() 
+            obj_obj_map_i = (1 - eye)
+            obj_obj_map[offset:offset + n_boxes, offset:offset + n_boxes] = obj_obj_map_i
             rel_ind_i = rel_pair_idx + offset
-            offset += len(proposal)
+            offset += n_boxes
             rel_inds.append(rel_ind_i)
 
         rel_inds = torch.cat(rel_inds, dim=0)
@@ -281,7 +285,7 @@ class SquatContext(nn.Module):
         masks_n2e = [self.mask_predictor_n2e(k).squeeze(1) for k in feat_pred_batch_key]
         top_inds_n2e = [torch.topk(mask, int(mask.size(0) * self.beta))[1] for mask in masks_n2e]
         
-        augment_obj_feat = torch.split(augment_obj_feat, [len(proposal) for proposal in proposals])
+        augment_obj_feat = torch.split(augment_obj_feat, [len(proposal["boxes"]) for proposal in proposals])
         
         feat_pred_batch = [self.m2m_decoder(q.unsqueeze(1), (u.unsqueeze(1), p.unsqueeze(1)), (ind, ind_e2e, ind_n2e)).squeeze(1) \
                            for p, u, q, ind, ind_e2e, ind_n2e in \

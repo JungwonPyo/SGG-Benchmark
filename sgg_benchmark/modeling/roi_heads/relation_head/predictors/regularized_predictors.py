@@ -29,25 +29,25 @@ from ..models import MODEL_MAP
 @registry.ROI_RELATION_PREDICTOR.register("PrototypeEmbeddingNetwork")
 class PrototypeEmbeddingNetwork(BasePredictor):
     def __init__(self, config, in_channels):
-        super().__init__(config, in_channels)        
+        super().__init__(config, in_channels)
 
         obj_classes, rel_classes = self.statistics['obj_classes'], self.statistics['rel_classes']
 
-        dropout_p = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_DROPOUT_RATE
+        dropout_p = self.cfg.model.roi_relation_head.context_dropout_rate
 
         self.context_layer = PENetContext(config, obj_classes, rel_classes, in_channels, dropout_p=dropout_p)
 
-        self.mlp_dim = self.cfg.MODEL.ROI_RELATION_HEAD.MLP_HEAD_DIM
-        self.embed_dim = self.cfg.MODEL.ROI_RELATION_HEAD.EMBED_DIM
-        self.spatial_for_vision = config.MODEL.ROI_RELATION_HEAD.USE_SPATIAL_FEATURES
-        self.use_union = config.MODEL.ROI_RELATION_HEAD.USE_UNION_FEATURES
+        self.mlp_dim = self.cfg.model.roi_relation_head.mlp_head_dim
+        self.embed_dim = self.cfg.model.roi_relation_head.embed_dim
+        self.spatial_for_vision = self.cfg.model.roi_relation_head.use_spatial_features
+        self.use_union = self.cfg.model.roi_relation_head.use_union_features
 
-        self.down_samp = MLP(self.pooling_dim, self.mlp_dim, self.mlp_dim, 2) 
+        self.down_samp = MLP(self.pooling_dim, self.mlp_dim, self.mlp_dim, 2)
         self.vis2sem = nn.Sequential(*[
-            nn.Linear(self.mlp_dim, self.mlp_dim*2), nn.ReLU(True),
-            nn.Dropout(dropout_p), nn.Linear(self.mlp_dim*2, self.mlp_dim)
+            nn.Linear(self.mlp_dim, self.mlp_dim * 2), nn.ReLU(True),
+            nn.Dropout(dropout_p), nn.Linear(self.mlp_dim * 2, self.mlp_dim)
         ])
-        self.gate_pred = nn.Linear(self.mlp_dim*2, self.mlp_dim)
+        self.gate_pred = nn.Linear(self.mlp_dim * 2, self.mlp_dim)
 
         self.W_pred = MLP(self.embed_dim, self.mlp_dim // 2, self.mlp_dim, 2)
 
@@ -58,10 +58,12 @@ class PrototypeEmbeddingNetwork(BasePredictor):
         self.norm_rel_rep = nn.LayerNorm(self.mlp_dim)
         self.linear_rel_rep = nn.Linear(self.mlp_dim, self.mlp_dim)
 
-        self.project_head = MLP(self.mlp_dim, self.mlp_dim, self.mlp_dim*2, 2)
+        self.project_head = MLP(self.mlp_dim, self.mlp_dim, self.mlp_dim * 2, 2)
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
-        rel_embed_vecs = rel_vectors(rel_classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=config.GLOVE_DIR, wv_dim=self.embed_dim)   # load Glove for predicates
+        classes = [v for k, v in self.rel_classes.items()]
+
+        rel_embed_vecs = rel_vectors(classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=self.embed_dim)
         self.rel_embed = nn.Embedding(self.num_rel_cls, self.embed_dim)
 
         with torch.no_grad():
@@ -93,7 +95,7 @@ class PrototypeEmbeddingNetwork(BasePredictor):
         rel_dists = rel_rep_norm @ predicate_proto_norm.t() * self.logit_scale.exp()  #  <r_norm, c_norm> / τ
         # the rel_dists will be used to calculate the Le_sim with the ce_loss
 
-        num_objs = [len(b) for b in proposals]
+        num_objs = [b["boxes"].shape[0] if isinstance(b, dict) else len(b) for b in proposals]
         num_rels = [r.shape[0] for r in rel_pair_idxs]
 
         entity_dists = entity_dists.split(num_objs, dim=0)
@@ -142,23 +144,23 @@ class CausalAnalysisPredictor(BasePredictor):
         super().__init__(config, in_channels)
         self.cfg = config
 
-        self.spatial_for_vision = config.MODEL.ROI_RELATION_HEAD.USE_SPATIAL_FEATURES
-        self.fusion_type = config.MODEL.ROI_RELATION_HEAD.CAUSAL.FUSION_TYPE
-        self.separate_spatial = config.MODEL.ROI_RELATION_HEAD.CAUSAL.SEPARATE_SPATIAL
-        self.use_vtranse = config.MODEL.ROI_RELATION_HEAD.CAUSAL.CONTEXT_LAYER == "vtranse"
-        self.effect_type = config.MODEL.ROI_RELATION_HEAD.CAUSAL.EFFECT_TYPE
+        self.spatial_for_vision = self.cfg.model.roi_relation_head.use_spatial_features
+        self.fusion_type = self.cfg.model.roi_relation_head.causal.fusion_type
+        self.separate_spatial = self.cfg.model.roi_relation_head.causal.separate_spatial
+        self.use_vtranse = self.cfg.model.roi_relation_head.causal.context_layer == "vtranse"
+        self.effect_type = self.cfg.model.roi_relation_head.causal.effect_type
 
         self.freq_bias = FrequencyBias(self.cfg, self.statistics)
         
         # load class dict
         obj_classes, rel_classes = self.statistics['obj_classes'], self.statistics['rel_classes']
 
-        assert config.MODEL.ROI_RELATION_HEAD.CAUSAL.CONTEXT_LAYER in MODEL_MAP
+        assert self.cfg.model.roi_relation_head.causal.context_layer in MODEL_MAP
         # init contextual encoding
-        if config.MODEL.ROI_RELATION_HEAD.CAUSAL.CONTEXT_LAYER == "vctree":
+        if self.cfg.model.roi_relation_head.causal.context_layer == "vctree":
             self.context_layer = VCTreeLSTMContext(config, obj_classes, rel_classes, self.statistics, in_channels)
         else:
-            self.context_layer = MODEL_MAP[config.MODEL.ROI_RELATION_HEAD.CAUSAL.CONTEXT_LAYER](config, obj_classes, rel_classes, in_channels)
+            self.context_layer = MODEL_MAP[self.cfg.model.roi_relation_head.causal.context_layer](config, obj_classes, rel_classes, in_channels)
 
         # post decoding
         if self.use_vtranse:
@@ -184,7 +186,7 @@ class CausalAnalysisPredictor(BasePredictor):
             layer_init(self.ctx_compress, xavier=True)
         layer_init(self.vis_compress, xavier=True)
         
-        assert self.pooling_dim == config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM
+        assert self.pooling_dim == self.cfg.model.roi_box_head.mlp_head_dim
 
         # add spatial emb for visual feature
         if self.spatial_for_vision:
@@ -199,7 +201,7 @@ class CausalAnalysisPredictor(BasePredictor):
         self.label_smooth_loss = Label_Smoothing_Regression(e=1.0)
 
         # untreated average features
-        self.effect_analysis = config.MODEL.ROI_RELATION_HEAD.CAUSAL.EFFECT_ANALYSIS
+        self.effect_analysis = self.cfg.model.roi_relation_head.causal.effect_analysis
         self.average_ratio = 0.0005
 
         self.register_buffer("untreated_spt", torch.zeros(32))
@@ -207,7 +209,7 @@ class CausalAnalysisPredictor(BasePredictor):
         self.register_buffer("avg_post_ctx", torch.zeros(self.pooling_dim))
         # self.register_buffer("untreated_feat", torch.zeros(self.pooling_dim))
 
-        self.obj_decode = not (self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX or self.cfg.MODEL.BACKBONE.FREEZE)
+        self.obj_decode = not (self.cfg.model.roi_relation_head.use_gt_box or self.cfg.model.backbone.freeze)
 
         
     def pair_feature_generate(self, roi_features, proposals, rel_pair_idxs, num_objs, obj_boxs, logger, ctx_average=False):
@@ -262,7 +264,7 @@ class CausalAnalysisPredictor(BasePredictor):
             union_features (Tensor): (batch_num_rel, context_pooling_dim): visual union feature of each pair
         """
         num_rels = [r.shape[0] for r in rel_pair_idxs]
-        num_objs = [len(b) for b in proposals]
+        num_objs = [b["boxes"].shape[0] if isinstance(b, dict) else len(b) for b in proposals]
         obj_boxs = [get_box_info(p.bbox, need_norm=True, proposal=p) for p in proposals]
 
         assert len(num_rels) == len(num_objs)

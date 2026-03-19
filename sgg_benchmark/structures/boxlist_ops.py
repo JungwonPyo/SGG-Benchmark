@@ -3,8 +3,14 @@ import torch
 import scipy.linalg
 
 from .bounding_box import BoxList
-
-from sgg_benchmark.layers import nms as _box_nms
+from .box_ops import (
+    box_nms,
+    box_iou as _box_iou,
+    box_union as _box_union,
+    box_intersection as _box_intersection,
+    box_area as _box_area,
+    box_convert
+)
 
 def squeeze_tensor(tensor):
     tensor = torch.squeeze(tensor)
@@ -29,12 +35,11 @@ def boxlist_nms(boxlist, nms_thresh, max_proposals=-1, score_field="scores"):
     if nms_thresh <= 0:
         return boxlist
     mode = boxlist.mode
-    boxlist = boxlist.convert("xyxy")
-    boxes = boxlist.bbox
+    boxes = boxlist.convert("xyxy").bbox
     score = boxlist.get_field(score_field)
-    keep = _box_nms(boxes, score, nms_thresh)
-    if max_proposals > 0:
-        keep = keep[: max_proposals]
+    
+    keep = box_nms(boxes, score, nms_thresh, max_proposals)
+    
     boxlist = boxlist[keep]
     return boxlist.convert(mode), keep
 
@@ -75,25 +80,11 @@ def boxlist_iou(boxlist1, boxlist2):
     if boxlist1.size != boxlist2.size:
         raise RuntimeError(
                 "boxlists should have same image size, got {}, {}".format(boxlist1, boxlist2))
-    boxlist1 = boxlist1.convert("xyxy")
-    boxlist2 = boxlist2.convert("xyxy")
+    
     N = len(boxlist1)
     M = len(boxlist2)
 
-    area1 = boxlist1.area()
-    area2 = boxlist2.area()
-
-    box1, box2 = boxlist1.bbox, boxlist2.bbox
-
-    lt = torch.max(box1[:, None, :2], box2[:, :2])  # [N,M,2]
-    rb = torch.min(box1[:, None, 2:], box2[:, 2:])  # [N,M,2]
-
-    TO_REMOVE = 1
-
-    wh = (rb - lt + TO_REMOVE).clamp(min=0)  # [N,M,2]
-    inter = wh[:, :, 0] * wh[:, :, 1]  # [N,M]
-
-    iou = inter / (area1[:, None] + area2 - inter)
+    iou = _box_iou(boxlist1.convert("xyxy").bbox, boxlist2.convert("xyxy").bbox)
     return iou
 
 
@@ -109,12 +100,8 @@ def boxlist_union(boxlist1, boxlist2):
       (BoxList) union, sized [N,4].
     """
     assert len(boxlist1) == len(boxlist2) and boxlist1.size == boxlist2.size
-    boxlist1 = boxlist1.convert("xyxy")
-    boxlist2 = boxlist2.convert("xyxy")
-    union_box = torch.cat((
-        torch.min(boxlist1.bbox[:,:2], boxlist2.bbox[:,:2]),
-        torch.max(boxlist1.bbox[:,2:], boxlist2.bbox[:,2:])
-        ),dim=1)
+    
+    union_box = _box_union(boxlist1.convert("xyxy").bbox, boxlist2.convert("xyxy").bbox)
     return BoxList(union_box, boxlist1.size, "xyxy")
 
 def boxlist_intersection(boxlist1, boxlist2):
@@ -129,14 +116,8 @@ def boxlist_intersection(boxlist1, boxlist2):
       (tensor) intersection, sized [N,4].
     """
     assert len(boxlist1) == len(boxlist2) and boxlist1.size == boxlist2.size
-    boxlist1 = boxlist1.convert("xyxy")
-    boxlist2 = boxlist2.convert("xyxy")
-    inter_box = torch.cat((
-        torch.max(boxlist1.bbox[:,:2], boxlist2.bbox[:,:2]),
-        torch.min(boxlist1.bbox[:,2:], boxlist2.bbox[:,2:])
-        ),dim=1)
-    invalid_bbox = torch.max((inter_box[:,0] >= inter_box[:,2]).long(), (inter_box[:,1] >= inter_box[:,3]).long())
-    inter_box[invalid_bbox > 0] = 0
+    
+    inter_box = _box_intersection(boxlist1.convert("xyxy").bbox, boxlist2.convert("xyxy").bbox)
     return BoxList(inter_box, boxlist1.size, "xyxy")
 
 # TODO redundant, remove

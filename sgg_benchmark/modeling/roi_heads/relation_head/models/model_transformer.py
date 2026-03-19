@@ -193,11 +193,11 @@ class TransformerEncoder(nn.Module):
 
 
 class TransformerContext(nn.Module):
-    def __init__(self, config, obj_classes, rel_classes, in_channels):
+    def __init__(self, cfg, obj_classes, rel_classes, in_channels):
         super().__init__()
-        self.cfg = config
+        self.cfg = cfg
         # setting parameters
-        self.obj_decode = not (self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX or self.cfg.MODEL.BACKBONE.FREEZE)
+        self.obj_decode = not (self.cfg.model.roi_relation_head.use_gt_box or self.cfg.model.backbone.freeze)
 
         self.obj_classes = obj_classes
         self.rel_classes = rel_classes
@@ -205,21 +205,21 @@ class TransformerContext(nn.Module):
         self.num_rel_cls = len(rel_classes)
         self.in_channels = in_channels
         self.obj_dim = in_channels
-        self.embed_dim = self.cfg.MODEL.ROI_RELATION_HEAD.EMBED_DIM
-        self.hidden_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.nms_thresh = self.cfg.TEST.RELATION.LATER_NMS_PREDICTION_THRES
+        self.embed_dim = self.cfg.model.roi_relation_head.embed_dim
+        self.hidden_dim = self.cfg.model.roi_relation_head.context_hidden_dim
+        self.nms_thresh = self.cfg.test.relation.later_nms_prediction_thres
 
-        self.dropout_rate = self.cfg.MODEL.ROI_RELATION_HEAD.TRANSFORMER.DROPOUT_RATE   
-        self.obj_layer = self.cfg.MODEL.ROI_RELATION_HEAD.TRANSFORMER.OBJ_LAYER      
-        self.edge_layer = self.cfg.MODEL.ROI_RELATION_HEAD.TRANSFORMER.REL_LAYER        
-        self.num_head = self.cfg.MODEL.ROI_RELATION_HEAD.TRANSFORMER.NUM_HEAD         
-        self.inner_dim = self.cfg.MODEL.ROI_RELATION_HEAD.TRANSFORMER.INNER_DIM     
-        self.k_dim = self.cfg.MODEL.ROI_RELATION_HEAD.TRANSFORMER.KEY_DIM         
-        self.v_dim = self.cfg.MODEL.ROI_RELATION_HEAD.TRANSFORMER.VAL_DIM    
+        self.dropout_rate = self.cfg.model.roi_relation_head.transformer.dropout_rate
+        self.obj_layer = self.cfg.model.roi_relation_head.transformer.obj_layer
+        self.edge_layer = self.cfg.model.roi_relation_head.transformer.rel_layer
+        self.num_head = self.cfg.model.roi_relation_head.transformer.num_head
+        self.inner_dim = self.cfg.model.roi_relation_head.transformer.inner_dim
+        self.k_dim = self.cfg.model.roi_relation_head.transformer.key_dim
+        self.v_dim = self.cfg.model.roi_relation_head.transformer.val_dim
 
 
         # the following word embedding layer should be initalize by glove.6B before using
-        embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=self.embed_dim)
+        embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=self.embed_dim)
         self.obj_embed1 = nn.Embedding(self.num_obj_cls, self.embed_dim)
         self.obj_embed2 = nn.Embedding(self.num_obj_cls, self.embed_dim)
         with torch.no_grad():
@@ -240,28 +240,28 @@ class TransformerContext(nn.Module):
         self.context_edge = TransformerEncoder(self.edge_layer, self.num_head, self.k_dim, 
                                                 self.v_dim, self.hidden_dim, self.inner_dim, self.dropout_rate)
     
-        self.use_text_features_only = self.cfg.MODEL.ROI_RELATION_HEAD.TEXTUAL_FEATURES_ONLY
-        self.use_visual_features_only = self.cfg.MODEL.ROI_RELATION_HEAD.VISUAL_FEATURES_ONLY
+        self.use_text_features_only = self.cfg.model.roi_relation_head.textual_features_only
+        self.use_visual_features_only = self.cfg.model.roi_relation_head.visual_features_only
 
     def forward(self, roi_features, proposals, rel_pair_idx, logger=None):
         # labels will be used in DecoderRNN during training
         use_gt_label = self.training or not self.obj_decode
-        obj_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0) if use_gt_label else None
+        obj_labels = cat([proposal["labels"] for proposal in proposals], dim=0) if use_gt_label else None
 
         # label/logits embedding will be used as input
         if not self.obj_decode:
             obj_embed = self.obj_embed1(obj_labels)
         else:
-            obj_logits = cat([proposal.get_field("predict_logits") for proposal in proposals], dim=0).detach()
+            obj_logits = cat([proposal["predict_logits"] for proposal in proposals], dim=0).detach()
             obj_embed = F.softmax(obj_logits, dim=1) @ self.obj_embed1.weight
         
         # bbox embedding will be used as input
-        assert proposals[0].mode == 'xyxy'
+        assert proposals[0]["mode"] == 'xyxy'
         pos_embed = self.bbox_embed(encode_box_info(proposals))
 
         # encode objects with transformer
         obj_pre_rep = cat((roi_features, obj_embed, pos_embed), -1)
-        num_objs = [len(p) for p in proposals]
+        num_objs = [len(p["boxes"]) for p in proposals]
         obj_pre_rep = self.lin_obj(obj_pre_rep)
         obj_feats = self.context_obj(obj_pre_rep, num_objs)
 
@@ -273,7 +273,7 @@ class TransformerContext(nn.Module):
             obj_dists = self.out_obj(obj_feats)
             use_decoder_nms = self.obj_decode and not self.training
             if use_decoder_nms:
-                boxes_per_cls = [proposal.get_field('boxes_per_cls') for proposal in proposals]
+                boxes_per_cls = [proposal["boxes_per_cls"] for proposal in proposals]
                 obj_preds = nms_per_cls(obj_dists, boxes_per_cls, num_objs, self.nms_thresh)
             else:
                 obj_preds = obj_dists[:, 1:].max(1)[1] + 1

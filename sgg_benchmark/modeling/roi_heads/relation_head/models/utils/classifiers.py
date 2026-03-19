@@ -4,7 +4,10 @@ import torch
 from torch import nn
 from torch.nn import functional as F, init
 
-from sgg_benchmark.config import cfg
+"""
+Classifier utilities for relation heads.
+Refactored to avoid global cfg; pass cfg explicitly to build_classifier.
+"""
 
 
 class WeightNormClassifier(nn.Module):
@@ -173,12 +176,13 @@ class CosineSimilarityClassifier(nn.Module):
         return torch.mm(self.scale * x_normalized, w_normalized.t())
 
 
-def build_classifier(input_dim, num_class, bias=True):
-    if cfg.MODEL.ROI_RELATION_HEAD.CLASSIFIER == "weighted_norm":
+def build_classifier(cfg, input_dim, num_class, bias=True):
+    classifier_type = cfg.model.roi_relation_head.classifier
+    if classifier_type == "weighted_norm":
         return WeightNormClassifier(input_dim, num_class)
-    elif cfg.MODEL.ROI_RELATION_HEAD.CLASSIFIER == "cosine_similarity":
+    elif classifier_type == "cosine_similarity":
         return CosineSimilarityClassifier(input_dim, num_class)
-    elif cfg.MODEL.ROI_RELATION_HEAD.CLASSIFIER == "linear":
+    elif classifier_type == "linear":
         return DotProductClassifier(input_dim, num_class, bias)
     else:
         raise ValueError('invalid classifier type')

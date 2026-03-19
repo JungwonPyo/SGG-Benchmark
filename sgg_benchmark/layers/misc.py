@@ -15,6 +15,14 @@ from torch import nn
 from torch.nn.modules.utils import _ntuple
 import torch.nn.functional as F
 
+def autopad(k, p=None, d=1):  # kernel, padding, dilation
+    """Pad to 'same' shape outputs."""
+    if d > 1:
+        k = d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]  # actual kernel-size
+    if p is None:
+        p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
+    return p
+
 class _NewEmptyTensorOp(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, new_shape):
@@ -42,6 +50,61 @@ class Conv2d(torch.nn.Conv2d):
         output_shape = [x.shape[0], self.weight.shape[0]] + output_shape
         return _NewEmptyTensorOp.apply(x, output_shape)
 
+class Conv(nn.Module): # Ultralytics YOLO Conv layer
+    """
+    Standard convolution module with batch normalization and activation.
+
+    Attributes:
+        conv (nn.Conv2d): Convolutional layer.
+        bn (nn.BatchNorm2d): Batch normalization layer.
+        act (nn.Module): Activation function layer.
+        default_act (nn.Module): Default activation function (SiLU).
+    """
+
+    default_act = nn.SiLU()  # default activation
+
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
+        """
+        Initialize Conv layer with given parameters.
+
+        Args:
+            c1 (int): Number of input channels.
+            c2 (int): Number of output channels.
+            k (int): Kernel size.
+            s (int): Stride.
+            p (int, optional): Padding.
+            g (int): Groups.
+            d (int): Dilation.
+            act (bool | nn.Module): Activation function.
+        """
+        super().__init__()
+        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+
+    def forward(self, x):
+        """
+        Apply convolution, batch normalization and activation to input tensor.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            (torch.Tensor): Output tensor.
+        """
+        return self.act(self.bn(self.conv(x)))
+
+    def forward_fuse(self, x):
+        """
+        Apply convolution and activation without batch normalization.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            (torch.Tensor): Output tensor.
+        """
+        return self.act(self.conv(x))
 
 class ConvTranspose2d(torch.nn.ConvTranspose2d):
     def forward(self, x):
@@ -111,97 +174,6 @@ def interpolate(
     return _NewEmptyTensorOp.apply(input, output_shape)
 
 
-class DFConv2d(nn.Module):
-    """Deformable convolutional layer"""
-    def __init__(
-        self,
-        in_channels,
-        out_channels,
-        with_modulated_dcn=True,
-        kernel_size=3,
-        stride=1,
-        groups=1,
-        dilation=1,
-        deformable_groups=1,
-        bias=False
-    ):
-        super(DFConv2d, self).__init__()
-        if isinstance(kernel_size, (list, tuple)):
-            assert isinstance(stride, (list, tuple))
-            assert isinstance(dilation, (list, tuple))
-            assert len(kernel_size) == 2
-            assert len(stride) == 2
-            assert len(dilation) == 2
-            padding = (
-                dilation[0] * (kernel_size[0] - 1) // 2,
-                dilation[1] * (kernel_size[1] - 1) // 2
-            )
-            offset_base_channels = kernel_size[0] * kernel_size[1]
-        else:
-            padding = dilation * (kernel_size - 1) // 2
-            offset_base_channels = kernel_size * kernel_size
-        if with_modulated_dcn:
-            from sgg_benchmark.layers import ModulatedDeformConv
-            offset_channels = offset_base_channels * 3 #default: 27
-            conv_block = ModulatedDeformConv
-        else:
-            from sgg_benchmark.layers import DeformConv
-            offset_channels = offset_base_channels * 2 #default: 18
-            conv_block = DeformConv
-        self.offset = Conv2d(
-            in_channels,
-            deformable_groups * offset_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            groups=1,
-            dilation=dilation
-        )
-        for l in [self.offset,]:
-            nn.init.kaiming_uniform_(l.weight, a=1)
-            torch.nn.init.constant_(l.bias, 0.)
-        self.conv = conv_block(
-            in_channels,
-            out_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            dilation=dilation,
-            groups=groups,
-            deformable_groups=deformable_groups,
-            bias=bias
-        )
-        self.with_modulated_dcn = with_modulated_dcn
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.padding = padding
-        self.dilation = dilation
-
-    def forward(self, x):
-        if x.numel() > 0:
-            if not self.with_modulated_dcn:
-                offset = self.offset(x)
-                x = self.conv(x, offset)
-            else:
-                offset_mask = self.offset(x)
-                offset = offset_mask[:, :18, :, :]
-                mask = offset_mask[:, -9:, :, :].sigmoid()
-                x = self.conv(x, offset, mask)
-            return x
-        # get output shape
-        output_shape = [
-            (i + 2 * p - (di * (k - 1) + 1)) // d + 1
-            for i, p, di, k, d in zip(
-                x.shape[-2:],
-                self.padding,
-                self.dilation,
-                self.kernel_size,
-                self.stride
-            )
-        ]
-        output_shape = [x.shape[0], self.conv.weight.shape[0]] + output_shape
-        return _NewEmptyTensorOp.apply(x, output_shape)
-    
 class MLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
         super().__init__()

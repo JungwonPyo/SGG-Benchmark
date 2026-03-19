@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from sgg_benchmark.config import cfg
 from sgg_benchmark.data.datasets.evaluation import evaluate
+from sgg_benchmark.structures.box_ops import box_convert
 from ..utils.comm import is_main_process, get_world_size
 from ..utils.comm import all_gather
 from ..utils.comm import synchronize
@@ -18,7 +19,16 @@ import networkx as nx
 import datetime
 
 
-def compute_on_dataset(model, data_loader, device, synchronize_gather=True, timer=None, silence=False,
+def to_device(data, device):
+    if hasattr(data, "to"):
+        return data.to(device)
+    if isinstance(data, dict):
+        return {k: to_device(v, device) for k, v in data.items()}
+    if isinstance(data, list):
+        return [to_device(v, device) for v in data]
+    return data
+
+def compute_on_dataset(model, data_loader, device, cfg=None, synchronize_gather=True, timer=None, silence=False,
                        informative=False):
     model.eval()
     results_dict = {}
@@ -37,13 +47,13 @@ def compute_on_dataset(model, data_loader, device, synchronize_gather=True, time
         #     break
         with torch.no_grad():
             images, targets, image_ids = batch
-            targets = [target.to(device) for target in targets]
+            targets = to_device(targets, device)
 
             if timer:
                 starter.record()
                 if informative:
                     starter2.record()
-            if cfg.TEST.BBOX_AUG.ENABLED:
+            if cfg is not None and cfg.test.bbox_aug.enabled:
                 output = im_detect_bbox_aug(model, images, device)
             else:
                 # compute GFLOPS
@@ -55,8 +65,8 @@ def compute_on_dataset(model, data_loader, device, synchronize_gather=True, time
                 timings.append(curr_time)
 
             if informative:
-                for boxlist in output:
-                    informative_post_process(boxlist=boxlist, obj_classes=obj_classes, pred_classes=pred_classes,
+                for inst in output:
+                    informative_post_process(boxlist=inst, obj_classes=obj_classes, pred_classes=pred_classes,
                                              informative_rels=informative_rels)
                 if timer:
                     ender2.record()
@@ -64,12 +74,12 @@ def compute_on_dataset(model, data_loader, device, synchronize_gather=True, time
                     curr_time = starter2.elapsed_time(ender2)
                     timings2.append(curr_time)
 
-            output = [o.to(cpu_device) for o in output]
+            output = to_device(output, cpu_device)
 
             # add image_path to output
-            if output[0].has_field('image_path'):
-                for i, o in enumerate(output):
-                    o.add_field('image_path', targets[i].get_field('image_path'))
+            for i, o in enumerate(output):
+                if 'image_path' in targets[i]:
+                    o['image_path'] = targets[i]['image_path']
 
         if synchronize_gather:
             synchronize()
@@ -109,14 +119,14 @@ def init_informative_post_process():
 
 
 def informative_post_process(boxlist, obj_classes, pred_classes, informative_rels, top_n=100):
-    scores = boxlist.get_field('pred_rel_scores')[:top_n]
-    labels = boxlist.get_field('pred_rel_labels')[:top_n]
-    pd_rels = boxlist.get_field('rel_pair_idxs')[:top_n]
+    scores = boxlist['pred_rel_scores'][:top_n]
+    labels = boxlist['pred_rel_labels'][:top_n]
+    pd_rels = boxlist['rel_pair_idxs'][:top_n]
 
     if len(pd_rels) == 0:
         return
 
-    pd_labels = boxlist.get_field('pred_labels')
+    pd_labels = boxlist['pred_labels']
 
     pd_s_labels = pd_labels[pd_rels[:, 0]]
     pd_o_labels = pd_labels[pd_rels[:, 1]]
@@ -161,20 +171,20 @@ def informative_post_process(boxlist, obj_classes, pred_classes, informative_rel
     # # replace the first len(sorting_idx) elements of full_idx with sorting_idx
     # full_idx[:len(sorting_idx)] = sorting_idx
 
-    boxlist.remove_field('pred_rel_scores')
-    boxlist.remove_field('pred_rel_labels')
-    boxlist.remove_field('rel_pair_idxs')
+    # boxlist.remove_field('pred_rel_scores')
+    # boxlist.remove_field('pred_rel_labels')
+    # boxlist.remove_field('rel_pair_idxs')
 
-    boxlist.add_field('pred_rel_scores', scores[sorting_idx])
-    boxlist.add_field('pred_rel_labels', labels[sorting_idx])
-    boxlist.add_field('rel_pair_idxs', pd_rels[sorting_idx])
+    boxlist['pred_rel_scores'] = scores[sorting_idx]
+    boxlist['pred_rel_labels'] = labels[sorting_idx]
+    boxlist['rel_pair_idxs'] = pd_rels[sorting_idx]
 
 
 def generate_detect_sg(predictions, vg_dict, obj_thres=0.5):
-    all_obj_labels = predictions.get_field('pred_labels')
-    all_obj_scores = predictions.get_field('pred_scores')
-    all_rel_pairs = predictions.get_field('rel_pair_idxs')
-    all_rel_prob = predictions.get_field('pred_rel_scores')
+    all_obj_labels = predictions['pred_labels']
+    all_obj_scores = predictions['pred_scores']
+    all_rel_pairs = predictions['rel_pair_idxs']
+    all_rel_prob = predictions['pred_rel_scores']
     all_rel_scores, all_rel_labels = all_rel_prob.max(-1)
 
     # filter objects and relationships
@@ -259,7 +269,7 @@ def inference(
         informative=False,
         silence=False,
 ):
-    load_prediction_from_cache = cfg.TEST.ALLOW_LOAD_FROM_CACHE and output_folder is not None and os.path.exists(
+    load_prediction_from_cache = cfg.test.allow_load_from_cache and output_folder is not None and os.path.exists(
         os.path.join(output_folder, "predictions.pth"))
 
     # convert to a torch.device for efficiency
@@ -279,12 +289,12 @@ def inference(
         predictions = torch.load(pred_path, map_location=torch.device("cpu"))
         logger.info("Loaded predictions from cache in {}".format(pred_path))
     else:
-        predictions, timings, timings2 = compute_on_dataset(model, data_loader, device,
-                                                            synchronize_gather=cfg.TEST.RELATION.SYNC_GATHER,
+        predictions, timings, timings2 = compute_on_dataset(model, data_loader, device, cfg=cfg,
+                                                            synchronize_gather=cfg.test.relation.sync_gather,
                                                             timer=True, silence=silence, informative=False)
         # wait for all processes to complete before measuring the time
         synchronize()
-        batch_size = int(cfg.TEST.IMS_PER_BATCH)
+        batch_size = int(cfg.test.ims_per_batch)
 
         total_time_str = str(datetime.timedelta(seconds=int(sum(timings2) / 1000)))
         avg_per_image = np.mean(timings2) / batch_size
@@ -306,7 +316,7 @@ def inference(
 
     if not load_prediction_from_cache:
         predictions = _accumulate_predictions_from_multiple_gpus(predictions,
-                                                                 synchronize_gather=cfg.TEST.RELATION.SYNC_GATHER)
+                                                                 synchronize_gather=cfg.test.relation.sync_gather)
 
     if not is_main_process():
         return -1.0
@@ -336,13 +346,6 @@ def inference(
             data.update(latency)
         json.dump(data, open(os.path.join(output_folder, file_name), "w"))
 
-    if cfg.TEST.CUSTUM_EVAL:
-        detected_sgg = custom_sgg_post_precessing(predictions)
-        with open(os.path.join(cfg.DETECTED_SGG_DIR, 'custom_prediction.json'), 'w') as outfile:
-            json.dump(detected_sgg, outfile)
-        print('=====> ' + str(os.path.join(cfg.DETECTED_SGG_DIR, 'custom_prediction.json')) + ' SAVED !')
-        return -1.0
-
     # return None
     return evaluate(cfg=cfg,
                     dataset=dataset,
@@ -356,34 +359,34 @@ def inference(
 def custom_sgg_post_precessing(predictions):
     output_dict = {}
     for idx, boxlist in enumerate(predictions):
-        xyxy_bbox = boxlist.convert('xyxy').bbox
+        xyxy_bbox = box_convert(boxlist['boxes'], boxlist['mode'], 'xyxy')
         # current sgg info
         current_dict = {}
         # sort bbox based on confidence
-        sortedid, id2sorted = get_sorted_bbox_mapping(boxlist.get_field('pred_scores').tolist())
+        sortedid, id2sorted = get_sorted_bbox_mapping(boxlist['pred_scores'].tolist())
         # sorted bbox label and score
         bbox = []
         bbox_labels = []
         bbox_scores = []
         for i in sortedid:
             bbox.append(xyxy_bbox[i].tolist())
-            bbox_labels.append(boxlist.get_field('pred_labels')[i].item())
-            bbox_scores.append(boxlist.get_field('pred_scores')[i].item())
+            bbox_labels.append(boxlist['pred_labels'][i].item())
+            bbox_scores.append(boxlist['pred_scores'][i].item())
         current_dict['bbox'] = bbox
         current_dict['bbox_labels'] = bbox_labels
         current_dict['bbox_scores'] = bbox_scores
         # sorted relationships
-        rel_sortedid, _ = get_sorted_bbox_mapping(boxlist.get_field('pred_rel_scores')[:, 1:].max(1)[0].tolist())
+        rel_sortedid, _ = get_sorted_bbox_mapping(boxlist['pred_rel_scores'][:, 1:].max(1)[0].tolist())
         # sorted rel
         rel_pairs = []
         rel_labels = []
         rel_scores = []
         rel_all_scores = []
         for i in rel_sortedid:
-            rel_labels.append(boxlist.get_field('pred_rel_scores')[i][1:].max(0)[1].item() + 1)
-            rel_scores.append(boxlist.get_field('pred_rel_scores')[i][1:].max(0)[0].item())
-            rel_all_scores.append(boxlist.get_field('pred_rel_scores')[i].tolist())
-            old_pair = boxlist.get_field('rel_pair_idxs')[i].tolist()
+            rel_labels.append(boxlist['pred_rel_scores'][i][1:].max(0)[1].item() + 1)
+            rel_scores.append(boxlist['pred_rel_scores'][i][1:].max(0)[0].item())
+            rel_all_scores.append(boxlist['pred_rel_scores'][i].tolist())
+            old_pair = boxlist['rel_pair_idxs'][i].tolist()
             rel_pairs.append([id2sorted[old_pair[0]], id2sorted[old_pair[1]]])
         current_dict['rel_pairs'] = rel_pairs
         current_dict['rel_labels'] = rel_labels

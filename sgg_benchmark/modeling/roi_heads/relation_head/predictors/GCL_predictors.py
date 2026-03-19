@@ -24,13 +24,13 @@ class TransLike_GCL(nn.Module):
         super(TransLike_GCL, self).__init__()
         # load parameters
         self.config = config
-        self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.NUM_CLASSES
-        self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
+        self.num_obj_cls = config.model.roi_box_head.num_classes
+        self.num_rel_cls = config.model.roi_relation_head.num_classes
 
         assert in_channels is not None
         num_inputs = in_channels
-        self.use_vision = config.MODEL.ROI_RELATION_HEAD.USE_UNION_FEATURES
-        self.use_bias = config.GLOBAL_SETTING.USE_BIAS
+        self.use_vision = config.model.roi_relation_head.use_union_features
+        self.use_bias = config.global_setting.use_bias
 
         # load class dict
         statistics = get_dataset_statistics(config)
@@ -43,16 +43,16 @@ class TransLike_GCL(nn.Module):
         self.rel_classes = rel_classes
         self.in_channels = in_channels
         # module construct
-        if config.GLOBAL_SETTING.BASIC_ENCODER == 'Self-Attention':
+        if config.global_setting.basic_encoder == 'Self-Attention':
             self.context_layer = TransformerContext(config, obj_classes, rel_classes, in_channels)
-        elif config.GLOBAL_SETTING.BASIC_ENCODER == 'Cross-Attention':
+        elif config.global_setting.basic_encoder == 'Cross-Attention':
             self.context_layer = CA_Context(config, obj_classes, rel_classes, in_channels)
-        elif config.GLOBAL_SETTING.BASIC_ENCODER == 'Hybrid-Attention':
+        elif config.global_setting.basic_encoder == 'Hybrid-Attention':
             self.context_layer = SHA_Context(config, obj_classes, rel_classes, in_channels)
 
         # post decoding
-        self.hidden_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.pooling_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
+        self.hidden_dim = config.model.roi_relation_head.context_hidden_dim
+        self.pooling_dim = config.model.roi_relation_head.context_pooling_dim
         self.post_emb = nn.Linear(self.hidden_dim, self.hidden_dim * 2)
         self.post_cat = nn.Linear(self.hidden_dim * 2, self.pooling_dim)
 
@@ -60,21 +60,21 @@ class TransLike_GCL(nn.Module):
         layer_init(self.post_emb, 10.0 * (1.0 / self.hidden_dim) ** 0.5, normal=True)
         layer_init(self.post_cat, xavier=True)
 
-        if self.pooling_dim != config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM:
+        if self.pooling_dim != config.model.roi_box_head.mlp_head_dim:
             self.union_single_not_match = True
-            self.up_dim = nn.Linear(config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM, self.pooling_dim)
+            self.up_dim = nn.Linear(config.model.roi_box_head.mlp_head_dim, self.pooling_dim)
             layer_init(self.up_dim, xavier=True)
         else:
             self.union_single_not_match = False
 
         # get model configs
-        self.Knowledge_Transfer_Mode = config.GLOBAL_SETTING.GCL_SETTING.KNOWLEDGE_TRANSFER_MODE
-        self.no_relation_restrain = config.GLOBAL_SETTING.GCL_SETTING.NO_RELATION_RESTRAIN
-        self.zero_label_padding_mode = config.GLOBAL_SETTING.GCL_SETTING.ZERO_LABEL_PADDING_MODE
-        self.knowledge_loss_coefficient = config.GLOBAL_SETTING.GCL_SETTING.KNOWLEDGE_LOSS_COEFFICIENT
+        self.Knowledge_Transfer_Mode = config.global_setting.gcl_setting.knowledge_transfer_mode
+        self.no_relation_restrain = config.global_setting.gcl_setting.no_relation_restrain
+        self.zero_label_padding_mode = config.global_setting.gcl_setting.zero_label_padding_mode
+        self.knowledge_loss_coefficient = config.global_setting.gcl_setting.knowledge_loss_coefficient
         # generate the auxiliary lists
-        self.group_split_mode = config.GLOBAL_SETTING.GCL_SETTING.GROUP_SPLIT_MODE
-        dataset_name = config.DATASETS.NAME
+        self.group_split_mode = config.global_setting.gcl_setting.group_split_mode
+        dataset_name = config.datasets.name
         num_of_group_element_list, predicate_stage_count = get_group_splits(dataset_name, self.group_split_mode, predicate_new_order, predicate_new_order_count)
         self.max_group_element_number_list = generate_num_stage_vector(num_of_group_element_list)
         self.incre_idx_list, self.max_elemnt_list, self.group_matrix, self.kd_matrix = get_current_predicate_idx(
@@ -105,7 +105,7 @@ class TransLike_GCL(nn.Module):
         tail_rep = edge_rep[:, 1].contiguous().view(-1, self.hidden_dim)
 
         num_rels = [r.shape[0] for r in rel_pair_idxs]
-        num_objs = [len(b) for b in proposals]
+        num_objs = [b["boxes"].shape[0] if isinstance(b, dict) else len(b) for b in proposals]
         assert len(num_rels) == len(num_objs)
 
         head_reps = head_rep.split(num_objs, dim=0)
@@ -130,8 +130,8 @@ class TransLike_GCL(nn.Module):
             visual_rep = ctx_gate * union_features
 
         if self.training:
-            if not self.config.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
-                fg_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
+            if not self.config.model.roi_relation_head.use_gt_object_label:
+                fg_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
                 loss_refine_obj = self.criterion_loss(obj_dists, fg_labels.long())
                 add_losses['obj_loss'] = loss_refine_obj
 
@@ -382,13 +382,13 @@ class MotifsLikePredictor(nn.Module):
     def __init__(self, config, in_channels):
         super(MotifsLikePredictor, self).__init__()
         self.config = config
-        self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.NUM_CLASSES
-        self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
+        self.num_obj_cls = config.model.roi_box_head.num_classes
+        self.num_rel_cls = config.model.roi_relation_head.num_classes
 
         assert in_channels is not None
         num_inputs = in_channels
-        self.use_vision = config.MODEL.ROI_RELATION_HEAD.USE_UNION_FEATURES
-        self.use_bias = config.GLOBAL_SETTING.USE_BIAS
+        self.use_vision = config.model.roi_relation_head.use_union_features
+        self.use_bias = config.global_setting.use_bias
 
         # load class dict
         statistics = get_dataset_statistics(config)
@@ -396,16 +396,16 @@ class MotifsLikePredictor(nn.Module):
         assert self.num_obj_cls == len(obj_classes)
         assert self.num_rel_cls == len(rel_classes)
         # init contextual lstm encoding
-        if config.GLOBAL_SETTING.BASIC_ENCODER == 'Motifs':
+        if config.global_setting.basic_encoder == 'Motifs':
             self.context_layer = LSTMContext(config, obj_classes, rel_classes, in_channels)
-        elif config.GLOBAL_SETTING.BASIC_ENCODER == 'VTransE':
+        elif config.global_setting.basic_encoder == 'VTransE':
             self.context_layer = VTransEFeature(config, obj_classes, rel_classes, in_channels)
         else:
             exit('wrong mode!')
 
         # post decoding
-        self.hidden_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.pooling_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
+        self.hidden_dim = config.model.roi_relation_head.context_hidden_dim
+        self.pooling_dim = config.model.roi_relation_head.context_pooling_dim
         self.post_emb = nn.Linear(self.hidden_dim, self.hidden_dim * 2)
         self.post_cat = nn.Linear(self.hidden_dim * 2, self.pooling_dim)
         self.rel_compress = nn.Linear(self.pooling_dim, self.num_rel_cls, bias=True)
@@ -415,9 +415,9 @@ class MotifsLikePredictor(nn.Module):
         layer_init(self.post_cat, xavier=True)
         layer_init(self.rel_compress, xavier=True)
 
-        if self.pooling_dim != config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM:
+        if self.pooling_dim != config.model.roi_box_head.mlp_head_dim:
             self.union_single_not_match = True
-            self.up_dim = nn.Linear(config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM, self.pooling_dim)
+            self.up_dim = nn.Linear(config.model.roi_box_head.mlp_head_dim, self.pooling_dim)
             layer_init(self.up_dim, xavier=True)
         else:
             self.union_single_not_match = False
@@ -446,7 +446,7 @@ class MotifsLikePredictor(nn.Module):
         tail_rep = edge_rep[:, 1].contiguous().view(-1, self.hidden_dim)
 
         num_rels = [r.shape[0] for r in rel_pair_idxs]
-        num_objs = [len(b) for b in proposals]
+        num_objs = [b["boxes"].shape[0] if isinstance(b, dict) else len(b) for b in proposals]
         assert len(num_rels) == len(num_objs)
 
         head_reps = head_rep.split(num_objs, dim=0)
@@ -478,7 +478,7 @@ class MotifsLikePredictor(nn.Module):
 
         if self.training:
             if not self.config.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
-                fg_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
+                fg_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
                 loss_refine_obj = self.criterion_loss(obj_dists, fg_labels.long())
                 add_losses['obj_loss'] = loss_refine_obj
             rel_labels = cat(rel_labels, dim=0)
@@ -496,31 +496,31 @@ class MotifsLike_GCL(nn.Module):
         self.config = config
         statistics = get_dataset_statistics(config)
  
-        self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.NUM_CLASSES
-        self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
+        self.num_obj_cls = config.model.roi_box_head.num_classes
+        self.num_rel_cls = config.model.roi_relation_head.num_classes
         predicate_new_order = statistics['predicate_new_order']
         predicate_new_order_count = statistics['predicate_new_order_count']
 
         assert in_channels is not None
         num_inputs = in_channels
-        self.use_vision = config.MODEL.ROI_RELATION_HEAD.USE_UNION_FEATURES
-        self.use_bias = config.GLOBAL_SETTING.USE_BIAS
+        self.use_vision = config.model.roi_relation_head.use_union_features
+        self.use_bias = config.global_setting.use_bias
 
         # load class dict
         obj_classes, rel_classes = statistics['obj_classes'], statistics['rel_classes']
         assert self.num_obj_cls==len(obj_classes)
         assert self.num_rel_cls==len(rel_classes)
         # init contextual lstm encoding
-        if config.GLOBAL_SETTING.BASIC_ENCODER == 'Motifs':
+        if config.global_setting.basic_encoder == 'Motifs':
             self.context_layer = LSTMContext(config, obj_classes, rel_classes, in_channels)
-        elif config.GLOBAL_SETTING.BASIC_ENCODER == 'VTransE':
+        elif config.global_setting.basic_encoder == 'VTransE':
             self.context_layer = VTransEFeature(config, obj_classes, rel_classes, in_channels)
         else:
             exit('wrong mode!')
 
         # post decoding
-        self.hidden_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.pooling_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
+        self.hidden_dim = config.model.roi_relation_head.context_hidden_dim
+        self.pooling_dim = config.model.roi_relation_head.context_pooling_dim
         self.post_emb = nn.Linear(self.hidden_dim, self.hidden_dim * 2)
         self.post_cat = nn.Linear(self.hidden_dim * 2, self.pooling_dim)
 
@@ -528,21 +528,21 @@ class MotifsLike_GCL(nn.Module):
         layer_init(self.post_emb, 10.0 * (1.0 / self.hidden_dim) ** 0.5, normal=True)
         layer_init(self.post_cat, xavier=True)
 
-        if self.pooling_dim != config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM:
+        if self.pooling_dim != config.model.roi_box_head.mlp_head_dim:
             self.union_single_not_match = True
-            self.up_dim = nn.Linear(config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM, self.pooling_dim)
+            self.up_dim = nn.Linear(config.model.roi_box_head.mlp_head_dim, self.pooling_dim)
             layer_init(self.up_dim, xavier=True)
         else:
             self.union_single_not_match = False
 
         # get model configs
-        self.Knowledge_Transfer_Mode = config.GLOBAL_SETTING.GCL_SETTING.KNOWLEDGE_TRANSFER_MODE
-        self.no_relation_restrain = config.GLOBAL_SETTING.GCL_SETTING.NO_RELATION_RESTRAIN
-        self.zero_label_padding_mode = config.GLOBAL_SETTING.GCL_SETTING.ZERO_LABEL_PADDING_MODE
-        self.knowledge_loss_coefficient = config.GLOBAL_SETTING.GCL_SETTING.KNOWLEDGE_LOSS_COEFFICIENT
+        self.Knowledge_Transfer_Mode = config.global_setting.gcl_setting.knowledge_transfer_mode
+        self.no_relation_restrain = config.global_setting.gcl_setting.no_relation_restrain
+        self.zero_label_padding_mode = config.global_setting.gcl_setting.zero_label_padding_mode
+        self.knowledge_loss_coefficient = config.global_setting.gcl_setting.knowledge_loss_coefficient
         # generate the auxiliary lists
-        self.group_split_mode = config.GLOBAL_SETTING.GCL_SETTING.GROUP_SPLIT_MODE
-        num_of_group_element_list, predicate_stage_count = get_group_splits(config.DATASETS.NAME, self.group_split_mode, predicate_new_order, predicate_new_order_count)
+        self.group_split_mode = config.global_setting.gcl_setting.group_split_mode
+        num_of_group_element_list, predicate_stage_count = get_group_splits(config.datasets.name, self.group_split_mode, predicate_new_order, predicate_new_order_count)
         self.max_group_element_number_list = generate_num_stage_vector(num_of_group_element_list)
         self.incre_idx_list, self.max_elemnt_list, self.group_matrix, self.kd_matrix = get_current_predicate_idx(
             num_of_group_element_list, 0.1, sum(predicate_stage_count)+1)
@@ -584,7 +584,7 @@ class MotifsLike_GCL(nn.Module):
         tail_rep = edge_rep[:, 1].contiguous().view(-1, self.hidden_dim)
 
         num_rels = [r.shape[0] for r in rel_pair_idxs]
-        num_objs = [len(b) for b in proposals]
+        num_objs = [b["boxes"].shape[0] if isinstance(b, dict) else len(b) for b in proposals]
         assert len(num_rels) == len(num_objs)
 
         head_reps = head_rep.split(num_objs, dim=0)
@@ -611,7 +611,7 @@ class MotifsLike_GCL(nn.Module):
         add_losses = {}
         if self.training:
             if not self.config.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
-                fg_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
+                fg_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
                 loss_refine_obj = self.criterion_loss(obj_dists, fg_labels.long())
                 add_losses['obj_loss'] = loss_refine_obj
 
@@ -835,16 +835,16 @@ class VCTree_GCL(nn.Module):
     def __init__(self, config, in_channels):
         super(VCTree_GCL, self).__init__()
         self.config = config
-        if config.GLOBAL_SETTING.DATASET_CHOICE == 'VG':
-            self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.VG_NUM_CLASSES
-            self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.VG_NUM_CLASSES
-        elif config.GLOBAL_SETTING.DATASET_CHOICE == 'GQA_200':
-            self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.GQA_200_NUM_CLASSES
-            self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.GQA_200_NUM_CLASSES
+        if config.global_setting.dataset_choice == 'VG':
+            self.num_obj_cls = config.model.roi_box_head.vg_num_classes
+            self.num_rel_cls = config.model.roi_relation_head.vg_num_classes
+        elif config.global_setting.dataset_choice == 'GQA_200':
+            self.num_obj_cls = config.model.roi_box_head.gqa_200_num_classes
+            self.num_rel_cls = config.model.roi_relation_head.gqa_200_num_classes
 
         assert in_channels is not None
         num_inputs = in_channels
-        self.use_bias = config.GLOBAL_SETTING.USE_BIAS
+        self.use_bias = config.global_setting.use_bias
 
         # load class dict
         statistics = get_dataset_statistics(config)
@@ -855,8 +855,8 @@ class VCTree_GCL(nn.Module):
         self.context_layer = VCTreeLSTMContext(config, obj_classes, rel_classes, statistics, in_channels)
 
         # post decoding
-        self.hidden_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.pooling_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
+        self.hidden_dim = config.model.roi_relation_head.context_hidden_dim
+        self.pooling_dim = config.model.roi_relation_head.context_pooling_dim
         self.post_emb = nn.Linear(self.hidden_dim, self.hidden_dim * 2)
         self.post_cat = nn.Linear(self.hidden_dim * 2, self.pooling_dim)
 
@@ -864,26 +864,26 @@ class VCTree_GCL(nn.Module):
         layer_init(self.post_emb, 10.0 * (1.0 / self.hidden_dim) ** 0.5, normal=True)
         layer_init(self.post_cat, xavier=True)
 
-        if self.pooling_dim != config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM:
+        if self.pooling_dim != config.model.roi_box_head.mlp_head_dim:
             self.union_single_not_match = True
-            self.up_dim = nn.Linear(config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM, self.pooling_dim)
+            self.up_dim = nn.Linear(config.model.roi_box_head.mlp_head_dim, self.pooling_dim)
             layer_init(self.up_dim, xavier=True)
         else:
             self.union_single_not_match = False
 
         # get model configs
-        self.Knowledge_Transfer_Mode = config.GLOBAL_SETTING.GCL_SETTING.KNOWLEDGE_TRANSFER_MODE
-        self.no_relation_restrain = config.GLOBAL_SETTING.GCL_SETTING.NO_RELATION_RESTRAIN
-        self.zero_label_padding_mode = config.GLOBAL_SETTING.GCL_SETTING.ZERO_LABEL_PADDING_MODE
-        self.knowledge_loss_coefficient = config.GLOBAL_SETTING.GCL_SETTING.KNOWLEDGE_LOSS_COEFFICIENT
+        self.Knowledge_Transfer_Mode = config.global_setting.gcl_setting.knowledge_transfer_mode
+        self.no_relation_restrain = config.global_setting.gcl_setting.no_relation_restrain
+        self.zero_label_padding_mode = config.global_setting.gcl_setting.zero_label_padding_mode
+        self.knowledge_loss_coefficient = config.global_setting.gcl_setting.knowledge_loss_coefficient
         # generate the auxiliary lists
-        self.group_split_mode = config.GLOBAL_SETTING.GCL_SETTING.GROUP_SPLIT_MODE
-        num_of_group_element_list, predicate_stage_count = get_group_splits(config.GLOBAL_SETTING.DATASET_CHOICE, self.group_split_mode)
+        self.group_split_mode = config.global_setting.gcl_setting.group_split_mode
+        num_of_group_element_list, predicate_stage_count = get_group_splits(config.global_setting.dataset_choice, self.group_split_mode)
         self.max_group_element_number_list = generate_num_stage_vector(num_of_group_element_list)
         self.incre_idx_list, self.max_elemnt_list, self.group_matrix, self.kd_matrix = get_current_predicate_idx(
-            num_of_group_element_list, 0.1, config.GLOBAL_SETTING.DATASET_CHOICE)
-        self.sample_rate_matrix = generate_sample_rate_vector(config.GLOBAL_SETTING.DATASET_CHOICE, self.max_group_element_number_list)
-        self.bias_for_group_split = generate_current_sequence_for_bias(num_of_group_element_list, config.GLOBAL_SETTING.DATASET_CHOICE)
+            num_of_group_element_list, 0.1, config.global_setting.dataset_choice)
+        self.sample_rate_matrix = generate_sample_rate_vector(config.global_setting.dataset_choice, self.max_group_element_number_list)
+        self.bias_for_group_split = generate_current_sequence_for_bias(num_of_group_element_list, config.global_setting.dataset_choice)
 
         self.num_groups = len(self.max_elemnt_list)
         self.rel_classifer_all = self.generate_muti_networks(self.num_groups)
@@ -915,7 +915,7 @@ class VCTree_GCL(nn.Module):
         tail_rep = edge_rep[:, 1].contiguous().view(-1, self.hidden_dim)
 
         num_rels = [r.shape[0] for r in rel_pair_idxs]
-        num_objs = [len(b) for b in proposals]
+        num_objs = [b["boxes"].shape[0] if isinstance(b, dict) else len(b) for b in proposals]
         assert len(num_rels) == len(num_objs)
 
         head_reps = head_rep.split(num_objs, dim=0)
@@ -946,7 +946,7 @@ class VCTree_GCL(nn.Module):
             add_losses["binary_loss"] = sum(binary_loss) / len(binary_loss)
 
             if not self.config.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
-                fg_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
+                fg_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
                 loss_refine_obj = self.criterion_loss(obj_dists, fg_labels.long())
                 add_losses['obj_loss'] = loss_refine_obj
 
@@ -1137,27 +1137,27 @@ class VCTree_GCL(nn.Module):
         return classifer_all
 
     def generate_multi_bias(self, config, statistics, num_cls):
-        self.freq_bias_1 = FrequencyBias_GCL(config, statistics, config.GLOBAL_SETTING.DATASET_CHOICE, predicate_all_list=self.bias_for_group_split[0])
-        self.freq_bias_2 = FrequencyBias_GCL(config, statistics, config.GLOBAL_SETTING.DATASET_CHOICE, predicate_all_list=self.bias_for_group_split[1])
-        self.freq_bias_3 = FrequencyBias_GCL(config, statistics, config.GLOBAL_SETTING.DATASET_CHOICE, predicate_all_list=self.bias_for_group_split[2])
-        self.freq_bias_4 = FrequencyBias_GCL(config, statistics, config.GLOBAL_SETTING.DATASET_CHOICE, predicate_all_list=self.bias_for_group_split[3])
+        self.freq_bias_1 = FrequencyBias_GCL(config, statistics, config.global_setting.dataset_choice, predicate_all_list=self.bias_for_group_split[0])
+        self.freq_bias_2 = FrequencyBias_GCL(config, statistics, config.global_setting.dataset_choice, predicate_all_list=self.bias_for_group_split[1])
+        self.freq_bias_3 = FrequencyBias_GCL(config, statistics, config.global_setting.dataset_choice, predicate_all_list=self.bias_for_group_split[2])
+        self.freq_bias_4 = FrequencyBias_GCL(config, statistics, config.global_setting.dataset_choice, predicate_all_list=self.bias_for_group_split[3])
         if num_cls < 4:
             exit('wrong num in multi_bias')
         elif num_cls == 4:
             freq_bias_all = [self.freq_bias_1, self.freq_bias_2, self.freq_bias_3, self.freq_bias_4]
         else:
-            self.freq_bias_5 = FrequencyBias_GCL(config, statistics, config.GLOBAL_SETTING.DATASET_CHOICE, predicate_all_list=self.bias_for_group_split[4])
+            self.freq_bias_5 = FrequencyBias_GCL(config, statistics, config.global_setting.dataset_choice, predicate_all_list=self.bias_for_group_split[4])
             if num_cls == 5:
                 freq_bias_all = [self.freq_bias_1, self.freq_bias_2, self.freq_bias_3, self.freq_bias_4,
                                  self.freq_bias_5]
             else:
-                self.freq_bias_6 = FrequencyBias_GCL(config, statistics, config.GLOBAL_SETTING.DATASET_CHOICE,
+                self.freq_bias_6 = FrequencyBias_GCL(config, statistics, config.global_setting.dataset_choice,
                                                       predicate_all_list=self.bias_for_group_split[5])
                 if num_cls == 6:
                     freq_bias_all = [self.freq_bias_1, self.freq_bias_2, self.freq_bias_3,
                                      self.freq_bias_4, self.freq_bias_5, self.freq_bias_6]
                 else:
-                    self.freq_bias_7 = FrequencyBias_GCL(config, statistics, config.GLOBAL_SETTING.DATASET_CHOICE,
+                    self.freq_bias_7 = FrequencyBias_GCL(config, statistics, config.global_setting.dataset_choice,
                                                           predicate_all_list=self.bias_for_group_split[6])
                     freq_bias_all = [self.freq_bias_1, self.freq_bias_2, self.freq_bias_3,
                                      self.freq_bias_4, self.freq_bias_5, self.freq_bias_6, self.freq_bias_7]
@@ -1170,12 +1170,12 @@ class TransLikePredictor(nn.Module):
     def __init__(self, config, in_channels):
         super(TransLikePredictor, self).__init__()
         self.config = config
-        if config.GLOBAL_SETTING.DATASET_CHOICE == 'VG':
-            self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.VG_NUM_CLASSES
-            self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.VG_NUM_CLASSES
-        elif config.GLOBAL_SETTING.DATASET_CHOICE == 'GQA_200':
-            self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.GQA_200_NUM_CLASSES
-            self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.GQA_200_NUM_CLASSES
+        if config.global_setting.dataset_choice == 'VG':
+            self.num_obj_cls = config.model.roi_box_head.vg_num_classes
+            self.num_rel_cls = config.model.roi_relation_head.vg_num_classes
+        elif config.global_setting.dataset_choice == 'GQA_200':
+            self.num_obj_cls = config.model.roi_box_head.gqa_200_num_classes
+            self.num_rel_cls = config.model.roi_relation_head.gqa_200_num_classes
 
         assert in_channels is not None
         num_inputs = in_channels
@@ -1239,7 +1239,7 @@ class TransLikePredictor(nn.Module):
         tail_rep = edge_rep[:, 1].contiguous().view(-1, self.hidden_dim)
 
         num_rels = [r.shape[0] for r in rel_pair_idxs]
-        num_objs = [len(b) for b in proposals]
+        num_objs = [b["boxes"].shape[0] if isinstance(b, dict) else len(b) for b in proposals]
         assert len(num_rels) == len(num_objs)
 
         head_reps = head_rep.split(num_objs, dim=0)
@@ -1270,7 +1270,7 @@ class TransLikePredictor(nn.Module):
 
         if self.training:
             if not self.config.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
-                fg_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
+                fg_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
                 loss_refine_obj = self.criterion_loss(obj_dists, fg_labels.long())
                 add_losses['obj_loss'] = loss_refine_obj
             rel_labels = cat(rel_labels, dim=0)

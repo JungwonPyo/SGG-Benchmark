@@ -12,14 +12,14 @@ def generate_forest(pair_scores, proposals, mode):
 
     for pair_score, proposal in zip(pair_scores, proposals):
         num_obj = pair_score.shape[0]
-        obj_label = proposal.get_field("labels") if not mode else proposal.get_field("predict_logits").max(-1)[1]
+        obj_label = proposal["labels"] if not mode else proposal["predict_logits"].max(-1)[1]
 
-        assert pair_score.shape[0] == len(proposal)
+        assert pair_score.shape[0] == len(proposal["boxes"])
         assert pair_score.shape[0] == pair_score.shape[1]
         node_scores = pair_score.mean(1).view(-1)
         root_idx = int(node_scores.max(-1)[1])
 
-        root = ArbitraryTree(root_idx, float(node_scores[root_idx]), int(obj_label[root_idx]), proposal.bbox[root_idx], is_root=True)
+        root = ArbitraryTree(root_idx, float(node_scores[root_idx]), int(obj_label[root_idx]), proposal["boxes"][root_idx], is_root=True)
 
         node_container = []
         remain_index = []
@@ -27,7 +27,7 @@ def generate_forest(pair_scores, proposals, mode):
         for idx in list(range(num_obj)):
             if idx == root_idx:
                 continue
-            new_node = ArbitraryTree(idx, float(node_scores[idx]), int(obj_label[idx]),  proposal.bbox[idx])
+            new_node = ArbitraryTree(idx, float(node_scores[idx]), int(obj_label[idx]),  proposal["boxes"][idx])
             node_container.append(new_node)
             remain_index.append(idx)
         
@@ -341,10 +341,10 @@ def bbox_area(bbox):
 
 def get_overlap_info(proposals):
     IM_SCALE = 1024
-    assert proposals[0].mode == 'xyxy'
+    assert proposals[0]["mode"] == 'xyxy'
     overlap_info = []
     for proposal in proposals:
-        boxes = proposal.bbox
+        boxes = proposal["boxes"]
         intersection = bbox_intersection(boxes, boxes).float()    # num, num
         overlap = bbox_overlap(boxes, boxes).float()                  # num, num
         area = bbox_area(boxes).float()                           # num, 1

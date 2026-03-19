@@ -8,7 +8,11 @@ import json
 import cv2
 import os
 
-from sgg_benchmark.structures.bounding_box import BoxList
+from sgg_benchmark.structures.box_ops import (
+    box_clip,
+    box_remove_empty,
+    filter_instances
+)
 from tqdm import tqdm
 
 class PSGDataset(torch.utils.data.Dataset):
@@ -135,13 +139,15 @@ class PSGDataset(torch.utils.data.Dataset):
         img_path = self.img_prefix + '/' + self.img_ids[index]
         
         img = cv2.imread(img_path)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # NOTE: do NOT convert BGR→RGB here — ToTensorYOLO (via LetterBox pipeline)
+        # already flips channels with [::-1], so the model receives correct RGB input.
+        # An extra cvtColor here would double-flip the channels, feeding BGR to the backbone.
 
         target = self.get_groundtruth(index)
 
         if self.transforms is not None:
             img, target = self.transforms(img, target)
-        target.add_field("image_path", img_path, is_triplet=True)
+        target["image_path"] = img_path
 
         return img, target, index
 
@@ -183,8 +189,12 @@ class PSGDataset(torch.utils.data.Dataset):
 
         gt_bboxes = torch.from_numpy(gt_bboxes).reshape(-1, 4)
 
-        target = BoxList(gt_bboxes, (w, h), 'xyxy') # xyxy
-        target.add_field("labels", torch.from_numpy(gt_labels.copy()))
+        target = {
+            "boxes": gt_bboxes,
+            "image_size": (w, h),
+            "mode": "xyxy",
+        }
+        target["labels"] = torch.from_numpy(gt_labels.copy())
         del gt_labels
 
         # Process relationship annotations
@@ -220,19 +230,20 @@ class PSGDataset(torch.utils.data.Dataset):
                 relation_map[int(gt_rels[i, 0]),
                              int(gt_rels[i, 1])] = int(gt_rels[i, 2])
                 
-        relation_map = torch.from_numpy(relation_map)
-        target.add_field("relation", relation_map, is_triplet=True)
+        target["relation"] = torch.from_numpy(relation_map)
 
         if evaluation:
-            target = target.clip_to_image(remove_empty=False)
-            target.add_field("relation_tuple", torch.LongTensor(gt_rels)) # for evaluation
+            target["boxes"] = box_clip(target["boxes"], (w, h), mode='xyxy')
+            target["relation_tuple"] = torch.LongTensor(gt_rels) # for evaluation
             if self.informative_graphs is not None:
-                target.add_field("informative_rels", self.informative_graphs[str(self.data_infos[idx]['id'])])
-            target.add_field("image_path", self.img_prefix + '/' + self.img_ids[idx])
-            return target
+                target["informative_rels"] = self.informative_graphs[str(self.data_infos[idx]['id'])]
+            target["image_path"] = self.img_prefix + '/' + self.img_ids[idx]
         else:
-            target = target.clip_to_image(remove_empty=True)
-            return target
+            target["boxes"] = box_clip(target["boxes"], (w, h), mode='xyxy')
+            keep = box_remove_empty(target["boxes"], mode='xyxy')
+            target = filter_instances(target, keep)
+        
+        return target
         
     def get_statistics(self):
         fg_matrix, bg_matrix, predicate_new_order, predicate_new_order_count, pred_prop, triplet_freq, pred_weight = self.get_PSG_statistics()
@@ -264,21 +275,21 @@ class PSGDataset(torch.utils.data.Dataset):
         fg_matrix = np.zeros((num_obj_classes, num_obj_classes, num_rel_classes), dtype=np.int64)
         bg_matrix = np.zeros((num_obj_classes, num_obj_classes), dtype=np.int64)
 
-        dat = PSGDataset('all', self.img_prefix, self.ann_file, filter_empty_rels=False, filter_duplicate_rels=False, informative_file="").data
+        dat = PSGDataset('train', self.img_prefix, self.ann_file, filter_empty_rels=False, filter_duplicate_rels=False, informative_file="").data
 
         for d in tqdm(dat):
             gt_classes = np.array([a['category_id'] for a in d['annotations']])
             gt_relations =np.array(d['relations'])
             gt_boxes = np.array([a['bbox'] for a in d['annotations']])
 
-            # For the foreground, we'll just look at everything
+            # o1, o2 are category IDs (0-132). Add 1 to match 1-indexed objects handled in training.
             o1o2 = gt_classes[gt_relations[:, :2]]
             for (o1, o2), gtr in zip(o1o2, gt_relations[:,2]):
-                fg_matrix[o1, o2, gtr] += 1
+                fg_matrix[o1+1, o2+1, gtr] += 1
             # For the background, get all of the things that overlap.
             o1o2_total = gt_classes[np.array(box_filter(gt_boxes, must_overlap=True), dtype=int)]
             for (o1, o2) in o1o2_total:
-                bg_matrix[o1, o2] += 1
+                bg_matrix[o1+1, o2+1] += 1
         
         stats_pred = {i: 0 for i in range(num_rel_classes)}
         for k in fg_matrix:
@@ -286,15 +297,25 @@ class PSGDataset(torch.utils.data.Dataset):
                 for i, x in enumerate(p):
                     stats_pred[i] += x
 
-        pred_freq = [stats_pred[i] / sum(stats_pred.values()) for i in range(num_rel_classes)]
+        # add background value - use sum of background matrix
+        stats_pred[0] = int(np.sum(bg_matrix))
+        
+        # Calculate frequencies AFTER adding background
+        total_count = sum(stats_pred.values())
+        pred_freq = [stats_pred[i] / max(1, total_count) for i in range(num_rel_classes)]
         
         # weight is the inverse frequency normalized by the median
-        pred_weights = torch.tensor(np.sum(fg_matrix, axis=(0, 1)))
-        pred_weights[0] = -1.0
-        pred_weights = (1./pred_weights) * torch.median(pred_weights)
+        # use a more robust weight calculation
+        vals = np.array([stats_pred[i] for i in range(num_rel_classes)], dtype=np.float32)
+        # Avoid division by zero and ensure positive weights
+        vals = np.clip(vals, a_min=1.0, a_max=None)
+        pred_weights = torch.from_numpy(1.0 / vals)
+        # Normalize by median of ALL classes (including BG)
+        pred_weights = pred_weights * torch.median(pred_weights)
+        
+        # Or alternatively, some people use a fixed weight for BG if it's too dominant
+        # pred_weights[0] = 0.1 # Example
 
-        # add background value
-        stats_pred[0] = len(bg_matrix.flatten())
         stats_pred = dict(sorted(stats_pred.items(), key=lambda x: x[1], reverse=True))
         predicate_new_order = list(stats_pred.keys())
         predicate_new_order_count = list(stats_pred.values())

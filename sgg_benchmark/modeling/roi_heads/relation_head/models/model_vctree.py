@@ -32,7 +32,7 @@ class DecoderTreeLSTM(torch.nn.Module):
         self.nms_thresh = 0.5
         self.dropout = dropout
         # generate embed layer
-        embed_vecs = obj_edge_vectors(['start'] + self.classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=embed_dim)
+        embed_vecs = obj_edge_vectors(['start'] + self.classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=embed_dim)
         self.obj_embed = nn.Embedding(len(self.classes) + 1, embed_dim)
         with torch.no_grad():
             self.obj_embed.weight.copy_(embed_vecs, non_blocking=True)
@@ -80,11 +80,11 @@ class VCTreeLSTMContext(nn.Module):
         self.num_obj_classes = len(obj_classes)
 
         # mode
-        self.obj_decode = not (self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX or self.cfg.MODEL.BACKBONE.FREEZE)
+        self.obj_decode = not (self.cfg.model.roi_relation_head.use_gt_box or self.cfg.model.backbone.freeze)
 
         # word embedding
-        self.embed_dim = self.cfg.MODEL.ROI_RELATION_HEAD.EMBED_DIM
-        obj_embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=self.embed_dim)
+        self.embed_dim = self.cfg.model.roi_relation_head.embed_dim
+        obj_embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=self.embed_dim)
         self.obj_embed1 = nn.Embedding(self.num_obj_classes, self.embed_dim)
         self.obj_embed2 = nn.Embedding(self.num_obj_classes, self.embed_dim)
         with torch.no_grad():
@@ -109,10 +109,10 @@ class VCTreeLSTMContext(nn.Module):
 
         # object & relation context
         self.obj_dim = in_channels
-        self.dropout_rate = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_DROPOUT_RATE
-        self.hidden_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.nl_obj = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_OBJ_LAYER
-        self.nl_edge = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_REL_LAYER
+        self.dropout_rate = self.cfg.model.roi_relation_head.context_dropout_rate
+        self.hidden_dim = self.cfg.model.roi_relation_head.context_hidden_dim
+        self.nl_obj = self.cfg.model.roi_relation_head.context_obj_layer
+        self.nl_edge = self.cfg.model.roi_relation_head.context_rel_layer
         assert self.nl_obj > 0 and self.nl_edge > 0
 
         # VCTree
@@ -155,7 +155,7 @@ class VCTreeLSTMContext(nn.Module):
         
         # untreated average features
         self.average_ratio = 0.0005
-        self.effect_analysis = config.MODEL.ROI_RELATION_HEAD.CAUSAL.EFFECT_ANALYSIS
+        self.effect_analysis = config.model.roi_relation_head.causal.effect_analysis
 
         if self.effect_analysis:
             self.register_buffer("untreated_dcd_feat", torch.zeros(self.hidden_dim + self.obj_dim + self.embed_dim + 128))
@@ -180,7 +180,7 @@ class VCTreeLSTMContext(nn.Module):
         obj_preds = []
         obj_dists = []
         for i, (feat, tree, proposal) in enumerate(zip(obj_feats, vc_forest, proposals)):
-            encod_rep = self.obj_ctx_rnn(tree, feat, len(proposal))
+            encod_rep = self.obj_ctx_rnn(tree, feat, len(proposal["boxes"]))
             obj_ctxs.append(encod_rep)
             # Decode in order
             if self.obj_decode:
@@ -190,7 +190,7 @@ class VCTreeLSTMContext(nn.Module):
                     decoder_inp = torch.cat((feat, encod_rep), 1)
                 if self.training and self.effect_analysis:
                     self.untreated_dcd_feat = self.moving_average(self.untreated_dcd_feat, decoder_inp)
-                obj_dist, obj_pred = self.decoder_rnn(tree, decoder_inp, len(proposal))
+                obj_dist, obj_pred = self.decoder_rnn(tree, decoder_inp, len(proposal["boxes"]))
             else:
                 assert obj_labels is not None
                 obj_pred = obj_labels[i]
@@ -219,10 +219,10 @@ class VCTreeLSTMContext(nn.Module):
         return edge_ctxs
 
     def forward(self, x, proposals, rel_pair_idxs, logger=None, all_average=False, ctx_average=False):
-        num_objs = [len(b) for b in proposals]
+        num_objs = [len(b["boxes"]) for b in proposals]
         # labels will be used in DecoderRNN during training (for nms)
         if self.training or not self.obj_decode:
-            obj_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
+            obj_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
         else:
             obj_labels = None
 
@@ -230,10 +230,10 @@ class VCTreeLSTMContext(nn.Module):
             obj_embed = self.obj_embed1(obj_labels.long())
             obj_logits = to_onehot(obj_labels, self.num_obj_classes)
         else:
-            obj_logits = cat([proposal.get_field("predict_logits") for proposal in proposals], dim=0).detach()
+            obj_logits = cat([proposal["predict_logits"] for proposal in proposals], dim=0).detach()
             obj_embed = F.softmax(obj_logits, dim=1) @ self.obj_embed1.weight
         
-        assert proposals[0].mode == 'xyxy'
+        assert proposals[0]["mode"] == 'xyxy'
         box_info = encode_box_info(proposals)
         pos_embed = self.pos_embed(box_info)
 

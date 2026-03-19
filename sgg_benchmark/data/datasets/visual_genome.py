@@ -10,8 +10,11 @@ from tqdm import tqdm
 import random
 import cv2
 
-from sgg_benchmark.structures.bounding_box import BoxList
-from sgg_benchmark.structures.boxlist_ops import boxlist_iou
+from sgg_benchmark.structures.box_ops import (
+    box_clip,
+    box_remove_empty,
+    filter_instances
+)
 
 BOX_SCALE = 1024  # Scale at which we have the boxes
 try:
@@ -23,7 +26,7 @@ except ImportError:
 class VGDataset(torch.utils.data.Dataset):
     def __init__(self, split, img_dir, roidb_file, dict_file, image_file, zeroshot_file, informative_file=None, transforms=None,
                 filter_empty_rels=True, num_im=-1, num_val_im=5000,
-                filter_duplicate_rels=True, filter_non_overlap=True, flip_aug=False, custom_eval=False, custom_path=''):
+                filter_duplicate_rels=True, filter_non_overlap=True, flip_aug=False):
         """
         Torch dataset for VisualGenome
         Parameters:
@@ -40,10 +43,6 @@ class VGDataset(torch.utils.data.Dataset):
             num_val_im: Number of images in the validation set (must be less than num_im
                unless num_im is -1.)
         """
-        # for debug
-        # num_im = 10000
-        # num_val_im = 4
-
         assert split in {'train', 'val', 'test', 'all'}
         self.flip_aug = flip_aug
         self.split = split
@@ -61,52 +60,42 @@ class VGDataset(torch.utils.data.Dataset):
 
         self.ind_to_classes, self.ind_to_predicates = load_info(dict_file) # self.ind_to_attributes
         self.categories = {i : self.ind_to_classes[i] for i in range(len(self.ind_to_classes))}
-        self.custom_eval = custom_eval
-        if self.custom_eval:
-            self.get_custom_imgs(custom_path)
-        else:
-            self.split_mask, self.gt_boxes, self.gt_classes,  self.relationships = load_graphs( # self.gt_attributes,
+        self.split_mask, self.gt_boxes, self.gt_classes,  self.relationships = load_graphs( # self.gt_attributes,
                 self.roidb_file, self.split, num_im, num_val_im=num_val_im,
                 filter_empty_rels=filter_empty_rels,
                 filter_non_overlap=self.filter_non_overlap,
             )
-            self.filenames, self.img_info = load_image_filenames(img_dir, image_file) # length equals to split_mask
-            self.filenames = [self.filenames[i] for i in np.where(self.split_mask)[0]]
-            self.img_info = [self.img_info[i] for i in np.where(self.split_mask)[0]]
+        self.filenames, self.img_info = load_image_filenames(img_dir, image_file) # length equals to split_mask
+        self.filenames = [self.filenames[i] for i in np.where(self.split_mask)[0]]
+        self.img_info = [self.img_info[i] for i in np.where(self.split_mask)[0]]
 
-            if informative_file != None and os.path.exists(informative_file):
-                self.informative_graphs = json.load(open(informative_file, 'r'))
+        if informative_file != None and os.path.exists(informative_file):
+            self.informative_graphs = json.load(open(informative_file, 'r'))
+        else:
+            self.informative_graphs = None
+
+        assert(len(self.filenames) == len(self.gt_boxes) == len(self.gt_classes) == len(self.relationships) == len(self.img_info))
+
+        if self.save_final_dict:
+            final_dict = []
+            if self.informative_graphs is not None:
+                for file, info, boxes, classes, rels, informative_rels in zip(self.filenames, self.img_info, self.gt_boxes, self.gt_classes, self.relationships, self.informative_graphs):
+                    final_dict.append({'width': info['width'], 'height': info['height'], 'img_path': file, 'boxes': np.array(boxes, dtype=np.float32), 'labels': np.array(classes), 'relations': np.array(rels), 'informative_rels': np.array(informative_rels)})
             else:
-                self.informative_graphs = None
-
-            assert(len(self.filenames) == len(self.gt_boxes) == len(self.gt_classes) == len(self.relationships) == len(self.img_info))
-
-            if self.save_final_dict:
-                final_dict = []
-                if self.informative_graphs is not None:
-                    for file, info, boxes, classes, rels, informative_rels in zip(self.filenames, self.img_info, self.gt_boxes, self.gt_classes, self.relationships, self.informative_graphs):
-                        final_dict.append({'width': info['width'], 'height': info['height'], 'img_path': file, 'boxes': np.array(boxes, dtype=np.float32), 'labels': np.array(classes), 'relations': np.array(rels), 'informative_rels': np.array(informative_rels)})
-                else:
-                    for file, info, boxes, classes, rels in zip(self.filenames, self.img_info, self.gt_boxes, self.gt_classes, self.relationships):
-                        final_dict.append({'width': info['width'], 'height': info['height'], 'img_path': file, 'boxes': np.array(boxes, dtype=np.float32), 'labels': np.array(classes), 'relations': np.array(rels)})
-                with open('final_dict.json', 'w') as f:
-                    json.dump(final_dict, f)
+                for file, info, boxes, classes, rels in zip(self.filenames, self.img_info, self.gt_boxes, self.gt_classes, self.relationships):
+                    final_dict.append({'width': info['width'], 'height': info['height'], 'img_path': file, 'boxes': np.array(boxes, dtype=np.float32), 'labels': np.array(classes), 'relations': np.array(rels)})
+            with open('final_dict.json', 'w') as f:
+                json.dump(final_dict, f)
 
     def __getitem__(self, index):
-        if self.custom_eval:
-            img = Image.open(self.custom_files[index]).convert("RGB")
-            target = torch.LongTensor([-1])
-            if self.transforms is not None:
-                img, target = self.transforms(img, target)
-            w, h = img.size
-            target = BoxList(torch.tensor([0, 0, 0, 0]), (w, h), 'xyxy')
-            return img, target, index
         flip_img = (random.random() > 0.5) and self.flip_aug and (self.split == 'train')
 
         target = self.get_groundtruth(index, flip_img)
 
         img = cv2.imread(self.filenames[index])
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # NOTE: do NOT convert BGR→RGB here — ToTensorYOLO (via LetterBox pipeline)
+        # already flips channels with [::-1], so the model receives correct RGB input.
+        # An extra cvtColor here would double-flip the channels, feeding BGR to the backbone.
 
         if flip_img:
             img = img.transpose(method=Image.FLIP_LEFT_RIGHT)
@@ -114,7 +103,7 @@ class VGDataset(torch.utils.data.Dataset):
         if self.transforms is not None:
             img, target = self.transforms(img, target)
 
-        target.add_field("image_path", self.filenames[index], is_triplet=True)
+        target["image_path"] = self.filenames[index]
 
         return img, target, index
 
@@ -127,8 +116,15 @@ class VGDataset(torch.utils.data.Dataset):
         #print("Number of non zero in fg_matrix: ", np.count_nonzero(fg_matrix))
         #fg_matrix[:, :, 0] = bg_matrix
         fg_sum = fg_matrix.sum(2)[:, :, None]
-        # Avoid division by zero by using np.where
-        pred_dist = np.log(np.where(fg_sum > 0, fg_matrix / fg_sum, 1e-10) + eps)  # Use a small value if sum is zero
+        
+        # More robust handling of division by zero and invalid values
+        with np.errstate(divide='ignore', invalid='ignore'):
+            # Normalize fg_matrix by fg_sum, handling zero division
+            normalized = np.divide(fg_matrix, fg_sum, out=np.zeros_like(fg_matrix, dtype=float), where=fg_sum > 0)
+            # Add epsilon and take log, replacing any remaining invalid values
+            pred_dist = np.log(normalized + eps)
+            # Replace any NaN or infinite values with a safe default
+            pred_dist = np.where(np.isfinite(pred_dist), pred_dist, np.log(eps))
 
         result = {
             'fg_matrix': torch.from_numpy(fg_matrix),
@@ -209,10 +205,15 @@ class VGDataset(torch.utils.data.Dataset):
             new_xmax = w - box[:,0]
             box[:,0] = new_xmin
             box[:,2] = new_xmax
-        target = BoxList(box, (w, h), 'xyxy') # xyxy
+        
+        target = {
+            "boxes": box,
+            "image_size": (w, h),
+            "mode": "xyxy",
+        }
 
-        target.add_field("labels", torch.from_numpy(self.gt_classes[index]))
-        #target.add_field("attributes", torch.from_numpy(self.gt_attributes[index]))
+        target["labels"] = torch.from_numpy(self.gt_classes[index])
+        #target["attributes"] = torch.from_numpy(self.gt_attributes[index])
 
         relation = self.relationships[index].copy() # (num_rel, 3)
         if self.filter_duplicate_rels:
@@ -225,7 +226,7 @@ class VGDataset(torch.utils.data.Dataset):
             relation = np.array(relation, dtype=np.int32)
         
         # add relation to target
-        num_box = len(target)
+        num_box = len(box)
         relation_map = torch.zeros((num_box, num_box), dtype=torch.int64)
         for i in range(relation.shape[0]):
             if relation_map[int(relation[i,0]), int(relation[i,1])] > 0:
@@ -233,27 +234,27 @@ class VGDataset(torch.utils.data.Dataset):
                     relation_map[int(relation[i,0]), int(relation[i,1])] = int(relation[i,2])
             else:
                 relation_map[int(relation[i,0]), int(relation[i,1])] = int(relation[i,2])
-        target.add_field("relation", relation_map, is_triplet=True)
+        target["relation"] = relation_map
 
         if evaluation:
-            target = target.clip_to_image(remove_empty=False)
-            target.add_field("relation_tuple", torch.LongTensor(relation)) # for evaluation
+            target["boxes"] = box_clip(target["boxes"], (w, h))
+            target["relation_tuple"] = torch.LongTensor(relation) # for evaluation
             if self.informative_graphs is not None:
-                target.add_field("informative_rels", self.informative_graphs[str(img_info['image_id'])])
-            target.add_field("image_path", self.filenames[index], is_triplet=False)
+                target["informative_rels"] = self.informative_graphs[str(img_info['image_id'])]
+            target["image_path"] = self.filenames[index]
         else:
-            target = target.clip_to_image(remove_empty=True)        
+            target["boxes"] = box_clip(target["boxes"], (w, h))
+            keep = box_remove_empty(target["boxes"], mode='xyxy')
+            target = filter_instances(target, keep)
 
         return target
     
     def __len__(self):
-        if self.custom_eval:
-            return len(self.custom_files)
         return len(self.filenames)
 
 
 def get_VG_statistics(img_dir, roidb_file, dict_file, image_file, zeroshot_file, must_overlap=True):
-    train_data = VGDataset(split='all', img_dir=img_dir, roidb_file=roidb_file, 
+    train_data = VGDataset(split='train', img_dir=img_dir, roidb_file=roidb_file, 
                         dict_file=dict_file, image_file=image_file, zeroshot_file=zeroshot_file, num_val_im=5000, 
                         filter_duplicate_rels=False)
     num_obj_classes = len(train_data.ind_to_classes)
@@ -535,12 +536,11 @@ def load_graphs(roidb_file, split, num_im, num_val_im, filter_empty_rels, filter
 
         if filter_non_overlap:
             assert split == 'train'
-            # construct BoxList object to apply boxlist_iou method
-            # give a useless (height=0, width=0)
-            boxes_i_obj = BoxList(boxes_i, (1000, 1000), 'xyxy')
-            inters = boxlist_iou(boxes_i_obj, boxes_i_obj)
+            # construct boxes to apply box_iou method
+            from sgg_benchmark.structures.box_ops import box_iou
+            inters = box_iou(boxes_i, boxes_i)
             rel_overs = inters[rels[:, 0], rels[:, 1]]
-            inc = np.where(rel_overs > 0.0)[0]
+            inc = np.where(rel_overs.cpu().numpy() > 0.0)[0]
 
             if inc.size > 0:
                 rels = rels[inc]

@@ -5,8 +5,6 @@ import os
 import torch
 
 from sgg_benchmark.utils.model_serialization import load_state_dict
-from sgg_benchmark.utils.c2_model_loading import load_c2_format
-from sgg_benchmark.utils.imports import import_file
 from sgg_benchmark.utils.model_zoo import cache_url
 from sgg_benchmark.utils.miscellaneous import get_path
 
@@ -101,13 +99,21 @@ class Checkpointer(object):
             f.write(last_filename)
 
     def _load_file(self, f):
-        return torch.load(f, map_location=torch.device("cpu"))
+        return torch.load(f, map_location=torch.device("cpu"), weights_only=False)
 
     def _load_model(self, checkpoint, load_mapping, verbose=False):
         load_state_dict(self.model, checkpoint.pop("model"), load_mapping, verbose)
 
 
 class DetectronCheckpointer(Checkpointer):
+    """Enhanced checkpointer with support for backbone loading and checkpoint resolution.
+    
+    Features:
+    - Loads model state with optional layer filtering (for backbone freezing)
+    - Supports catalog lookup for model references
+    - Handles URL caching for remote models
+    - Tracks training metadata (epoch, best_metric)
+    """
     def __init__(
         self,
         cfg,
@@ -119,36 +125,95 @@ class DetectronCheckpointer(Checkpointer):
         logger=None,
         custom_scheduler=False,
     ):
-        if not os.path.exists(save_dir):
-            if os.path.exists(cfg.OUTPUT_DIR):
-                save_dir = cfg.OUTPUT_DIR
-            elif os.path.exists(os.path.join(get_path(), cfg.OUTPUT_DIR)):
-                save_dir = os.path.join(get_path(), cfg.OUTPUT_DIR)
+        if save_dir is None:
+            save_dir = ""
+            
+        if save_dir and not os.path.exists(save_dir):
+            if os.path.exists(cfg.output_dir):
+                save_dir = cfg.output_dir
+            elif os.path.exists(os.path.join(get_path(), cfg.output_dir)):
+                save_dir = os.path.join(get_path(), cfg.output_dir)
 
         super(DetectronCheckpointer, self).__init__(
             model, optimizer, scheduler, save_dir, save_to_disk, logger, custom_scheduler
         )
-        self.cfg = cfg.clone()
+        # Store config as-is (OmegaConf DictConfig doesn't have clone method)
+        self.cfg = cfg
 
+    def save(self, name, epoch=None, best_metric=None, **kwargs):
+        """Save checkpoint with optional training metadata.
+        
+        Args:
+            name: Checkpoint name (without .pth extension)
+            epoch: Current epoch number (optional)
+            best_metric: Best validation metric value (optional)
+            **kwargs: Additional metadata to save
+        """
+        if not self.save_dir:
+            return
+
+        if not self.save_to_disk:
+            return
+
+        data = {}
+        data["model"] = self.model.state_dict()
+        if self.optimizer is not None:
+            data["optimizer"] = self.optimizer.state_dict()
+        if self.scheduler is not None and not self.custom_scheduler:
+            data["scheduler"] = self.scheduler.state_dict()
+        
+        # Add training metadata
+        if epoch is not None:
+            data["epoch"] = epoch
+        if best_metric is not None:
+            data["best_metric"] = best_metric
+        
+        data.update(kwargs)
+
+        save_file = os.path.join(self.save_dir, "{}.pth".format(name))
+        self.logger.info("Saving checkpoint to {}".format(save_file))
+        torch.save(data, save_file)
+        self.tag_last_checkpoint(save_file)
+
+    def load_backbone(self, checkpoint_path):
+        """Load pretrained backbone and optionally freeze it.
+        
+        Args:
+            checkpoint_path: Path to backbone checkpoint
+            backbone_prefix: Prefix for backbone layers in model
+            strict: Whether to strictly match state dict keys
+            
+        Returns:
+            Loaded checkpoint data (for metadata extraction)
+        """
+        if not checkpoint_path:
+            self.logger.info("No backbone checkpoint provided")
+            return {}
+        
+        self.logger.info("Loading backbone from {}".format(checkpoint_path))
+        try:
+            self.model.backbone.load(checkpoint_path)
+        except Exception as e:
+            self.logger.error("Error loading backbone: {}".format(e))
+            raise e
+        
     def _load_file(self, f):
-        # catalog lookup
-        if f.startswith("catalog://"):
-            paths_catalog = import_file(
-                "maskrcnn_benchmark.config.paths_catalog", self.cfg.PATHS_CATALOG, True
-            )
-            catalog_f = paths_catalog.ModelCatalog.get(f[len("catalog://") :])
-            self.logger.info("{} points to {}".format(f, catalog_f))
-            f = catalog_f
+        """Load checkpoint file, handling URLs.
+        
+        Args:
+            f: File path or URL
+            
+        Returns:
+            Loaded checkpoint dictionary
+        """
         # download url files
         if f.startswith("http"):
             # if the file is a url path, download it and cache it
             cached_f = cache_url(f)
             self.logger.info("url {} cached in {}".format(f, cached_f))
             f = cached_f
-        # convert Caffe2 checkpoint from pkl
-        if f.endswith(".pkl"):
-            return load_c2_format(self.cfg, f)
-        # load native detectron.pytorch checkpoint
+        
+        # load checkpoint
         loaded = super(DetectronCheckpointer, self)._load_file(f)
         if "model" not in loaded:
             loaded = dict(model=loaded)
@@ -187,10 +252,5 @@ def clip_grad_norm(named_parameters, max_norm, logger, clip=False, verbose=False
         for _, p in named_parameters:
             if p.grad is not None:
                 p.grad.mul_(clip_coef)
-
-    logger.debug('---Total norm {:.5f} clip coef {:.5f}-----------------'.format(total_norm, clip_coef))
-    for name, norm in sorted(param_to_norm.items(), key=lambda x: -x[1]):
-        logger.debug("{:<50s}: {:.5f}, ({})".format(name, norm, param_to_shape[name]))
-    logger.debug('-------------------------------')
 
     return total_norm

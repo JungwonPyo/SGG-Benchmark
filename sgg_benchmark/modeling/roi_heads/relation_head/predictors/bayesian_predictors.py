@@ -22,16 +22,16 @@ from ..models.utils.bayes_heads import BayesHead, BayesHeadProb
 class TransformerHierPredictor(nn.Module):
     def __init__(self, config, in_channels):
         super(TransformerHierPredictor, self).__init__()
-        self.attribute_on = config.MODEL.ATTRIBUTE_ON
+        self.attribute_on = config.model.attribute_on
         # load parameters
-        self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.NUM_CLASSES
-        self.num_att_cls = config.MODEL.ROI_ATTRIBUTE_HEAD.NUM_ATTRIBUTES
-        self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
+        self.num_obj_cls = config.model.roi_box_head.num_classes
+        self.num_att_cls = config.model.roi_attribute_head.num_attributes
+        self.num_rel_cls = config.model.roi_relation_head.num_classes
 
         assert in_channels is not None
         num_inputs = in_channels
-        self.use_vision = config.MODEL.ROI_RELATION_HEAD.USE_UNION_FEATURES
-        self.use_bias = config.MODEL.ROI_RELATION_HEAD.PREDICT_USE_BIAS
+        self.use_vision = config.model.roi_relation_head.use_union_features
+        self.use_bias = config.model.roi_relation_head.use_frequency_bias
 
         # load class dict
         statistics = get_dataset_statistics(config)
@@ -47,8 +47,8 @@ class TransformerHierPredictor(nn.Module):
         self.context_layer = TransformerContext(config, obj_classes, rel_classes, in_channels)
 
         # post decoding
-        self.hidden_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.pooling_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
+        self.hidden_dim = config.model.roi_relation_head.context_hidden_dim
+        self.pooling_dim = config.model.roi_relation_head.context_pooling_dim
         self.post_emb = nn.Linear(self.hidden_dim, self.hidden_dim * 2)
         self.post_cat = nn.Linear(self.hidden_dim * 2, self.pooling_dim)
         # self.rel_compress = nn.Linear(self.pooling_dim, self.num_rel_cls)
@@ -64,9 +64,9 @@ class TransformerHierPredictor(nn.Module):
         self.rel_compress.layer_init()
         self.ctx_compress.layer_init()
 
-        if self.pooling_dim != config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM:
+        if self.pooling_dim != config.model.roi_box_head.mlp_head_dim:
             self.union_single_not_match = True
-            self.up_dim = nn.Linear(config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM, self.pooling_dim)
+            self.up_dim = nn.Linear(config.model.roi_box_head.mlp_head_dim, self.pooling_dim)
             layer_init(self.up_dim, xavier=True)
         else:
             self.union_single_not_match = False
@@ -95,7 +95,7 @@ class TransformerHierPredictor(nn.Module):
         tail_rep = edge_rep[:, 1].contiguous().view(-1, self.hidden_dim)
 
         num_rels = [r.shape[0] for r in rel_pair_idxs]
-        num_objs = [len(b) for b in proposals]
+        num_objs = [b["boxes"].shape[0] if isinstance(b, dict) else len(b) for b in proposals]
         assert len(num_rels) == len(num_objs)
 
         head_reps = head_rep.split(num_objs, dim=0)
@@ -145,15 +145,15 @@ class TransformerHierPredictor(nn.Module):
 class MotifHierarchicalPredictor(nn.Module):
     def __init__(self, config, in_channels):
         super(MotifHierarchicalPredictor, self).__init__()
-        self.attribute_on = config.MODEL.ATTRIBUTE_ON
-        self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.NUM_CLASSES
-        self.num_att_cls = config.MODEL.ROI_ATTRIBUTE_HEAD.NUM_ATTRIBUTES
-        self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
+        self.attribute_on = config.model.attribute_on
+        self.num_obj_cls = config.model.roi_box_head.num_classes
+        self.num_att_cls = config.model.roi_attribute_head.num_attributes
+        self.num_rel_cls = config.model.roi_relation_head.num_classes
 
         assert in_channels is not None
         num_inputs = in_channels
-        self.use_vision = config.MODEL.ROI_RELATION_HEAD.USE_UNION_FEATURES
-        self.use_bias = config.MODEL.ROI_RELATION_HEAD.PREDICT_USE_BIAS
+        self.use_vision = config.model.roi_relation_head.use_union_features
+        self.use_bias = config.model.roi_relation_head.use_frequency_bias
 
         # load class dict
         statistics = get_dataset_statistics(config)
@@ -172,8 +172,8 @@ class MotifHierarchicalPredictor(nn.Module):
             self.context_layer = LSTMContext(config, obj_classes, rel_classes, in_channels)
 
         # post decoding
-        self.hidden_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.pooling_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
+        self.hidden_dim = config.model.roi_relation_head.context_hidden_dim
+        self.pooling_dim = config.model.roi_relation_head.context_pooling_dim
         self.post_emb = nn.Linear(self.hidden_dim, self.hidden_dim * 2)
         self.post_cat = nn.Linear(self.hidden_dim * 2, self.pooling_dim)
         self.rel_compress = BayesHead(input_dim=self.pooling_dim)
@@ -185,9 +185,9 @@ class MotifHierarchicalPredictor(nn.Module):
         self.rel_compress.layer_init()
         # layer_init(self.rel_compress, xavier=True)
 
-        if self.pooling_dim != config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM:
+        if self.pooling_dim != config.model.roi_box_head.mlp_head_dim:
             self.union_single_not_match = True
-            self.up_dim = nn.Linear(config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM, self.pooling_dim)
+            self.up_dim = nn.Linear(config.model.roi_box_head.mlp_head_dim, self.pooling_dim)
             layer_init(self.up_dim, xavier=True)
         else:
             self.union_single_not_match = False
@@ -226,7 +226,7 @@ class MotifHierarchicalPredictor(nn.Module):
         tail_rep = edge_rep[:, 1].contiguous().view(-1, self.hidden_dim)
 
         num_rels = [r.shape[0] for r in rel_pair_idxs]
-        num_objs = [len(b) for b in proposals]
+        num_objs = [b["boxes"].shape[0] if isinstance(b, dict) else len(b) for b in proposals]
         assert len(num_rels) == len(num_objs)
 
         head_reps = head_rep.split(num_objs, dim=0)
@@ -293,10 +293,10 @@ class MotifHierarchicalPredictor(nn.Module):
 class VCTreeHierPredictor(nn.Module):
     def __init__(self, config, in_channels):
         super(VCTreeHierPredictor, self).__init__()
-        self.attribute_on = config.MODEL.ATTRIBUTE_ON
-        self.num_obj_cls = config.MODEL.ROI_BOX_HEAD.NUM_CLASSES
-        self.num_att_cls = config.MODEL.ROI_ATTRIBUTE_HEAD.NUM_ATTRIBUTES
-        self.num_rel_cls = config.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
+        self.attribute_on = config.model.attribute_on
+        self.num_obj_cls = config.model.roi_box_head.num_classes
+        self.num_att_cls = config.model.roi_attribute_head.num_attributes
+        self.num_rel_cls = config.model.roi_relation_head.num_classes
 
         assert in_channels is not None
         num_inputs = in_channels
@@ -315,8 +315,8 @@ class VCTreeHierPredictor(nn.Module):
         self.context_layer = VCTreeLSTMContext(config, obj_classes, rel_classes, statistics, in_channels)
 
         # post decoding
-        self.hidden_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.pooling_dim = config.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
+        self.hidden_dim = config.model.roi_relation_head.context_hidden_dim
+        self.pooling_dim = config.model.roi_relation_head.context_pooling_dim
         self.post_emb = nn.Linear(self.hidden_dim, self.hidden_dim * 2)
         self.post_cat = nn.Linear(self.hidden_dim * 2, self.pooling_dim)
 
@@ -334,9 +334,9 @@ class VCTreeHierPredictor(nn.Module):
         layer_init(self.post_emb, 10.0 * (1.0 / self.hidden_dim) ** 0.5, normal=True)
         layer_init(self.post_cat, xavier=True)
 
-        if self.pooling_dim != config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM:
+        if self.pooling_dim != config.model.roi_box_head.mlp_head_dim:
             self.union_single_not_match = True
-            self.up_dim = nn.Linear(config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM, self.pooling_dim)
+            self.up_dim = nn.Linear(config.model.roi_box_head.mlp_head_dim, self.pooling_dim)
             layer_init(self.up_dim, xavier=True)
         else:
             self.union_single_not_match = False
@@ -363,7 +363,7 @@ class VCTreeHierPredictor(nn.Module):
         tail_rep = edge_rep[:, 1].contiguous().view(-1, self.hidden_dim)
 
         num_rels = [r.shape[0] for r in rel_pair_idxs]
-        num_objs = [len(b) for b in proposals]
+        num_objs = [b["boxes"].shape[0] if isinstance(b, dict) else len(b) for b in proposals]
         assert len(num_rels) == len(num_objs)
 
         head_reps = head_rep.split(num_objs, dim=0)
@@ -663,7 +663,7 @@ class CausalAnalysisHierPredictor(nn.Module):
             union_features (Tensor): (batch_num_rel, context_pooling_dim): visual union feature of each pair
         """
         num_rels = [r.shape[0] for r in rel_pair_idxs]
-        num_objs = [len(b) for b in proposals]
+        num_objs = [b["boxes"].shape[0] if isinstance(b, dict) else len(b) for b in proposals]
         obj_boxs = [get_box_info(p.bbox, need_norm=True, proposal=p) for p in proposals]
 
         assert len(num_rels) == len(num_objs)
@@ -795,5 +795,5 @@ class CausalAnalysisHierPredictor(nn.Module):
 
 
 def make_roi_relation_predictor(cfg, in_channels):
-    func = registry.ROI_RELATION_PREDICTOR[cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR]
+    func = registry.ROI_RELATION_PREDICTOR[cfg.model.roi_relation_head.predictor]
     return func(cfg, in_channels)

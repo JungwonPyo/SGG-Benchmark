@@ -1,10 +1,10 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 import torch
 from torch.nn import functional as F
+from typing import List, Dict, Any, Tuple, Optional
 
 from sgg_benchmark.modeling.box_coder import BoxCoder
 from sgg_benchmark.modeling.matcher import Matcher
-from sgg_benchmark.structures.boxlist_ops import boxlist_iou
+from sgg_benchmark.structures.box_ops import box_iou, filter_instances
 from sgg_benchmark.modeling.balanced_positive_negative_sampler import (
     BalancedPositiveNegativeSampler
 )
@@ -33,20 +33,24 @@ class FastRCNNSampling(object):
         self.box_coder = box_coder
         self.use_attributes = use_attris
 
-    def match_targets_to_proposals(self, proposal, target):
-        match_quality_matrix = boxlist_iou(target, proposal)
+    def match_targets_to_proposals(self, proposal: Dict[str, Any], target: Dict[str, Any]) -> Dict[str, Any]:
+        match_quality_matrix = box_iou(target["boxes"], proposal["boxes"], target["mode"], proposal["mode"])
         matched_idxs = self.proposal_matcher(match_quality_matrix)
-        # Fast RCNN only need "labels" field for selecting the targets
-        target = target.copy_with_fields(["labels"]) #, "attributes"
+        
         # get the targets corresponding GT for each proposal
-        # NB: need to clamp the indices because we can have a single
-        # GT in the image, and matched_idxs can be -2, which goes
-        # out of bounds
-        matched_targets = target[matched_idxs.clamp(min=0)]
-        matched_targets.add_field("matched_idxs", matched_idxs)
+        matched_targets = {
+            "boxes": target["boxes"][matched_idxs.clamp(min=0)],
+            "labels": target["labels"][matched_idxs.clamp(min=0)],
+            "image_size": target["image_size"],
+            "mode": target["mode"],
+            "matched_idxs": matched_idxs
+        }
+        if "attributes" in target:
+            matched_targets["attributes"] = target["attributes"][matched_idxs.clamp(min=0)]
+            
         return matched_targets
 
-    def prepare_targets(self, proposals, targets):
+    def prepare_targets(self, proposals: List[Dict[str, Any]], targets: List[Dict[str, Any]]):
         labels = []
         attributes = []
         regression_targets = []
@@ -55,17 +59,15 @@ class FastRCNNSampling(object):
             matched_targets = self.match_targets_to_proposals(
                 proposals_per_image, targets_per_image
             )
-            matched_idxs_per_image = matched_targets.get_field("matched_idxs")
-            labels_per_image = matched_targets.get_field("labels")
-            labels_per_image = labels_per_image.to(dtype=torch.int64)
+            matched_idxs_per_image = matched_targets["matched_idxs"]
+            labels_per_image = matched_targets["labels"].clone().to(dtype=torch.int64)
             
             # Label background (below the low threshold)
             bg_inds = matched_idxs_per_image == Matcher.BELOW_LOW_THRESHOLD
             labels_per_image[bg_inds] = 0
             
-            if self.use_attributes:
-                attris_per_image = matched_targets.get_field("attributes")
-                attris_per_image = attris_per_image.to(dtype=torch.int64)
+            if self.use_attributes and "attributes" in matched_targets:
+                attris_per_image = matched_targets["attributes"].clone().to(dtype=torch.int64)
                 attris_per_image[bg_inds,:] = 0
                 attributes.append(attris_per_image)
 
@@ -75,7 +77,7 @@ class FastRCNNSampling(object):
 
             # compute regression targets
             regression_targets_per_image = self.box_coder.encode(
-                matched_targets.bbox, proposals_per_image.bbox
+                matched_targets["boxes"], proposals_per_image["boxes"]
             )
 
             labels.append(labels_per_image)
@@ -84,15 +86,10 @@ class FastRCNNSampling(object):
 
         return labels, regression_targets, matched_idxs, attributes
 
-    def subsample(self, proposals, targets):
+    def subsample(self, proposals: List[Dict[str, Any]], targets: List[Dict[str, Any]]):
         """
         This method performs the positive/negative sampling, and return
         the sampled proposals.
-        Note: this function keeps a state.
-
-        Arguments:
-            proposals (list[BoxList])
-            targets (list[BoxList])
         """
         labels, regression_targets, matched_idxs, attributes = self.prepare_targets(proposals, targets)
 
@@ -101,70 +98,64 @@ class FastRCNNSampling(object):
         proposals = list(proposals)
 
         if attributes != []:
-            # add corresponding label and regression_targets information to the bounding boxes
             for labels_per_image, attributes_per_image, regression_targets_per_image, matched_idxs_per_image, proposals_per_image in zip(
                 labels, attributes, regression_targets, matched_idxs, proposals
             ):
-                proposals_per_image.add_field("labels", labels_per_image)
-                proposals_per_image.add_field("regression_targets", regression_targets_per_image)
-                proposals_per_image.add_field("matched_idxs", matched_idxs_per_image)
-                proposals_per_image.add_field("attributes", attributes_per_image)
+                proposals_per_image["labels"] = labels_per_image
+                proposals_per_image["regression_targets"] = regression_targets_per_image
+                proposals_per_image["matched_idxs"] = matched_idxs_per_image
+                proposals_per_image["attributes"] = attributes_per_image
         else:
             for labels_per_image, regression_targets_per_image, matched_idxs_per_image, proposals_per_image in zip(
                 labels, regression_targets, matched_idxs, proposals
             ):
-                proposals_per_image.add_field("labels", labels_per_image)
-                proposals_per_image.add_field("regression_targets", regression_targets_per_image)
-                proposals_per_image.add_field("matched_idxs", matched_idxs_per_image)
+                proposals_per_image["labels"] = labels_per_image
+                proposals_per_image["regression_targets"] = regression_targets_per_image
+                proposals_per_image["matched_idxs"] = matched_idxs_per_image
 
-        # distributed sampled proposals, that were obtained on all feature maps
-        # concatenated via the fg_bg_sampler, into individual feature map levels
+        # distributed sampled proposals
         for img_idx, (pos_inds_img, neg_inds_img) in enumerate(zip(sampled_pos_inds, sampled_neg_inds)):
             img_sampled_inds = torch.nonzero(pos_inds_img | neg_inds_img).squeeze(1)
-            proposals_per_image = proposals[img_idx][img_sampled_inds]
-            proposals[img_idx] = proposals_per_image
+            proposals[img_idx] = filter_instances(proposals[img_idx], img_sampled_inds)
 
         return proposals
 
-    def assign_label_to_proposals(self, proposals, targets):
+    def assign_label_to_proposals(self, proposals: List[Dict[str, Any]], targets: List[Dict[str, Any]]):
         for img_idx, (target, proposal) in enumerate(zip(targets, proposals)):
-            match_quality_matrix = boxlist_iou(target, proposal)
+            match_quality_matrix = box_iou(target["boxes"], proposal["boxes"], target["mode"], proposal["mode"])
             matched_idxs = self.proposal_matcher(match_quality_matrix)
-            # Fast RCNN only need "labels" field for selecting the targets
-            target = target.copy_with_fields(["labels", "attributes"]) if self.use_attributes else target.copy_with_fields(["labels"])
-            matched_targets = target[matched_idxs.clamp(min=0)]
             
-            labels_per_image = matched_targets.get_field("labels").to(dtype=torch.int64)
-            if self.use_attributes:
-                attris_per_image = matched_targets.get_field("attributes").to(dtype=torch.int64)
-                attris_per_image[matched_idxs < 0, :] = 0
-                proposals[img_idx].add_field("attributes", attris_per_image)
+            matched_labels = target["labels"][matched_idxs.clamp(min=0)].clone().to(dtype=torch.int64)
+            matched_labels[matched_idxs < 0] = 0
+            proposals[img_idx]["labels"] = matched_labels
 
-            labels_per_image[matched_idxs < 0] = 0
-            proposals[img_idx].add_field("labels", labels_per_image)
+            if self.use_attributes and "attributes" in target:
+                attris_per_image = target["attributes"][matched_idxs.clamp(min=0)].clone().to(dtype=torch.int64)
+                attris_per_image[matched_idxs < 0, :] = 0
+                proposals[img_idx]["attributes"] = attris_per_image
             
         return proposals
 
 
 def make_roi_box_samp_processor(cfg):
     matcher = Matcher(
-        cfg.MODEL.ROI_HEADS.FG_IOU_THRESHOLD,
-        cfg.MODEL.ROI_HEADS.BG_IOU_THRESHOLD,
+        cfg.model.roi_heads.fg_iou_threshold,
+        cfg.model.roi_heads.bg_iou_threshold,
         allow_low_quality_matches=False,
     )
 
-    bbox_reg_weights = cfg.MODEL.ROI_HEADS.BBOX_REG_WEIGHTS
+    bbox_reg_weights = cfg.model.roi_heads.bbox_reg_weights
     box_coder = BoxCoder(weights=bbox_reg_weights)
 
     fg_bg_sampler = BalancedPositiveNegativeSampler(
-        cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE, cfg.MODEL.ROI_HEADS.POSITIVE_FRACTION
+        cfg.model.roi_heads.batch_size_per_image, cfg.model.roi_heads.positive_fraction
     )
 
     samp_processor = FastRCNNSampling(
         matcher,
         fg_bg_sampler,
         box_coder,
-        cfg.MODEL.ATTRIBUTE_ON, # use_attris
+        cfg.model.attribute_on, # use_attris
     )
 
     return samp_processor

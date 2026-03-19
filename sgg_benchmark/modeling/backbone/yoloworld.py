@@ -3,13 +3,11 @@ import torch.nn.functional as F
 from ultralytics.nn.tasks import WorldModel
 from sgg_benchmark.data.transforms import LetterBox
 
-from ultralytics.nn.tasks import attempt_load_one_weight
+from ultralytics.nn.tasks import load_checkpoint
 from ultralytics.utils import ops
 from ultralytics.engine.results import Results
 
-from sgg_benchmark.structures.bounding_box import BoxList
 from sgg_benchmark.utils.txt_embeddings import obj_edge_vectors
-from sgg_benchmark.modeling.backbone.utils import non_max_suppression
 
 import numpy as np
 
@@ -21,16 +19,18 @@ from ultralytics.nn.modules import (
 
 class YoloWorldModel(WorldModel):
     def __init__(self, cfg, ch=3, nc=None, verbose=True):  # model, input channels, number of classes
-        yolo_cfg = cfg.MODEL.YOLO.SIZE+'.yaml'
+        yolo_cfg = cfg.model.yolo.size+'.yaml'
         self.cfg = cfg
         super().__init__(yolo_cfg, nc=nc, verbose=verbose)
         # self.features_layers = [len(self.model) - 2]
-        self.conf_thres = cfg.MODEL.BACKBONE.NMS_THRESH
-        self.iou_thres = cfg.MODEL.ROI_HEADS.NMS
-        self.device = cfg.MODEL.DEVICE
-        self.input_size = cfg.INPUT.MIN_SIZE_TRAIN
+        self.conf_thres = cfg.model.backbone.nms_thresh
+        self.iou_thres = cfg.model.roi_heads.nms
+        self.device = cfg.model.device
+        self.input_size = cfg.input.img_size  # (W, H)
+        self.input_w = int(self.input_size[0])
+        self.input_h = int(self.input_size[1])
         self.nc = nc
-        self.max_det = cfg.MODEL.ROI_HEADS.DETECTIONS_PER_IMG
+        self.max_det = cfg.model.roi_heads.detections_per_img
 
     def forward(self, x, profile=False, txt_feats=None, visualize=False, embed=None):
         txt_feats = (self.txt_feats if txt_feats is None else txt_feats).to(device=x.device, dtype=x.dtype)
@@ -76,7 +76,7 @@ class YoloWorldModel(WorldModel):
             task (str | None): model task
         """
 
-        weights, _ = attempt_load_one_weight(weights_path)
+        weights, _ = load_checkpoint(weights_path)
 
         if weights:
             super().load(weights)
@@ -126,7 +126,7 @@ class YoloWorldModel(WorldModel):
             orig_imgs = ops.convert_torch2numpy_batch(orig_imgs)
     
         # get model input size
-        imgsz = (self.input_size, self.input_size)
+        imgsz = (self.input_h, self.input_w)
         results = []
         for i, pred in enumerate(preds):
             orig_img = orig_imgs[i]
@@ -136,12 +136,13 @@ class YoloWorldModel(WorldModel):
     
     def postprocess(self, preds, image_sizes):
         """Post-processes predictions and returns a list of Results objects."""
-        preds, indices = non_max_suppression(
+        preds, indices = ops.non_max_suppression(
             preds,
             nc=self.nc,
             conf_thres=self.conf_thres,
             iou_thres=self.iou_thres,
             max_det=self.max_det,
+            return_idxs=True,
         )
 
         if len(preds) == 0:
@@ -149,11 +150,11 @@ class YoloWorldModel(WorldModel):
             boxes = torch.tensor([[0, 0, image_sizes[0][1], image_sizes[0][0]]], device=self.device)
             scores = torch.tensor([0.0], device=self.device)
             labels = torch.tensor([0], device=self.device)
-            boxlist = BoxList(boxes, image_sizes[0], mode="xyxy")
-            boxlist.add_field("pred_labels", labels)
-            boxlist.add_field("pred_scores", scores)
-            boxlist.add_field("labels", labels)
-            boxlist.add_field("feat_idx", torch.tensor([0], device=self.device))
+            boxlist = {"boxes": boxes, "image_size": image_sizes[0], "mode": "xyxy"}
+            boxlist["pred_labels"] = labels
+            boxlist["pred_scores"] = scores
+            boxlist["labels"] = labels
+            boxlist["feat_idx"] = torch.tensor([0], device=self.device)
             return [boxlist]
         
         results = []
@@ -162,18 +163,18 @@ class YoloWorldModel(WorldModel):
             out_img_size = image_sizes[i]
 
             boxes = pred[:, :4]
-            boxes = ops.scale_boxes((self.input_size, self.input_size), boxes, (out_img_size[1], out_img_size[0]))
+            boxes = ops.scale_boxes((self.input_h, self.input_w), boxes, (out_img_size[1], out_img_size[0]))
 
-            boxlist = BoxList(boxes, out_img_size, mode="xyxy")
+            boxlist = {"boxes": boxes, "image_size": out_img_size, "mode": "xyxy"}
 
             scores = pred[:, 4]
             labels = pred[:, 5].long()
-            boxlist.add_field("pred_labels", labels.detach().clone())
+            boxlist["pred_labels"] = labels.detach().clone()
             # add 1 to all labels to account for background class
             labels += 1
-            boxlist.add_field("pred_scores", scores)
-            boxlist.add_field("labels", labels)
-            boxlist.add_field("feat_idx", idx.long())
+            boxlist["pred_scores"] = scores
+            boxlist["labels"] = labels
+            boxlist["feat_idx"] = idx.long()
 
             results.append(boxlist)
         return results

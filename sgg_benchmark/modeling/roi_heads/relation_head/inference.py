@@ -1,9 +1,8 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 import torch
 import torch.nn.functional as F
 from torch import nn
+from typing import List, Dict, Any, Tuple, Optional
 
-from sgg_benchmark.structures.bounding_box import BoxList
 from sgg_benchmark.modeling.box_coder import BoxCoder
 from .models.utils.utils_relation import obj_prediction_nms
 
@@ -20,6 +19,7 @@ class PostProcessor(nn.Module):
         use_gt_box=False,
         proposals_as_gt=False,
         later_nms_pred_thres=0.3,
+        rel_topk=1000,
     ):
         """
         Arguments:
@@ -30,6 +30,7 @@ class PostProcessor(nn.Module):
         self.use_gt_box = use_gt_box
         self.proposals_as_gt = proposals_as_gt
         self.later_nms_pred_thres = later_nms_pred_thres
+        self.rel_topk = rel_topk
 
     def forward(self, x, rel_pair_idxs, boxes):
         """
@@ -81,55 +82,76 @@ class PostProcessor(nn.Module):
                     obj_pred = obj_pred + 1
                 else:
                     # NOTE: by kaihua, apply late nms for object prediction
-                    obj_pred = obj_prediction_nms(box.get_field('boxes_per_cls'), obj_logit, self.later_nms_pred_thres)
+                    obj_pred = obj_prediction_nms(box['boxes_per_cls'], obj_logit, self.later_nms_pred_thres)
                     obj_score_ind = torch.arange(num_obj_bbox, device=obj_logit.device) * num_obj_class + obj_pred
                     obj_scores = obj_class_prob.view(-1)[obj_score_ind]
                 assert obj_scores.shape[0] == num_obj_bbox
             else:
                 rel_logit, rel_pair_idx, box = current_it
-                obj_scores = box.get_field('pred_scores')
-                obj_pred = box.get_field('pred_labels')
-                obj_pred = obj_pred + 1
+                obj_scores = box['pred_scores']
+                obj_pred = box['pred_labels']
+                # box['pred_labels'] is already 1-indexed from backbone or GT
            
             obj_class = obj_pred
 
             if self.use_gt_box or self.proposals_as_gt:
-                boxlist = box
+                # Use a shallow copy to avoid modifying the input box dict if it's reused
+                box_dict = box.copy()
             else:
                 # mode==sgdet
                 # apply regression based on finetuned object class
                 device = obj_class.device
                 batch_size = obj_class.shape[0]
                 regressed_box_idxs = obj_class
-                boxlist = BoxList(box.get_field('boxes_per_cls')[torch.arange(batch_size, device=device), regressed_box_idxs], box.size, 'xyxy')
-            boxlist.add_field('pred_labels', obj_class) # (#obj, )
-            boxlist.add_field('pred_scores', obj_scores) # (#obj, )
+                box_dict = {
+                    "boxes": box['boxes_per_cls'][torch.arange(batch_size, device=device), regressed_box_idxs],
+                    "image_size": box["image_size"],
+                    "mode": 'xyxy'
+                }
+            box_dict['pred_labels'] = obj_class
+            box_dict['pred_scores'] = obj_scores
 
             if self.attribute_on:
-                boxlist.add_field('pred_attributes', att_prob)
+                box_dict['pred_attributes'] = att_prob
             
             # sorting triples according to score production
             obj_scores0 = obj_scores[rel_pair_idx[:, 0]]
             obj_scores1 = obj_scores[rel_pair_idx[:, 1]]
-            rel_class_prob = F.softmax(rel_logit, -1)
+            rel_class_prob = F.softmax(rel_logit, -1).to(obj_scores.device)
+            
+            # Label assignment: argmax over FG classes (unchanged)
             rel_scores, rel_class = rel_class_prob[:, 1:].max(dim=1)
             rel_class = rel_class + 1
-            # TODO Kaihua: how about using weighted some here?  e.g. rel*1 + obj *0.8 + obj*0.8
+
             triple_scores = rel_scores * obj_scores0 * obj_scores1
+            
             _, sorting_idx = torch.sort(triple_scores.view(-1), dim=0, descending=True)
+            
+            # Truncate to top K relations to avoid memory blow-up during evaluation
+            if not self.training and self.rel_topk > 0:
+                sorting_idx = sorting_idx[:self.rel_topk]
+
             rel_pair_idx = rel_pair_idx[sorting_idx]
             rel_class_prob = rel_class_prob[sorting_idx]
             rel_labels = rel_class[sorting_idx]
+            t_scores_sorted = triple_scores[sorting_idx]
 
-            boxlist.add_field('rel_pair_idxs', rel_pair_idx) # (#rel, 2)
-            boxlist.add_field('pred_rel_scores', rel_class_prob) # (#rel, #rel_class)
-            boxlist.add_field('pred_rel_labels', rel_labels) # (#rel, )
-            # should have fields : rel_pair_idxs, pred_rel_class_prob, pred_rel_labels, pred_labels, pred_scores
-            # Note
-            # TODO Kaihua: add a new type of element, which can have different length with boxlist (similar to field, except that once 
-            # the boxlist has such an element, the slicing operation should be forbidden.)
-            # it is not safe to add fields about relation into boxlist!
-            results.append(boxlist)
+            box_dict['rel_pair_idxs'] = rel_pair_idx # (#rel, 2)
+            box_dict['pred_rel_scores'] = rel_class_prob # (#rel, #rel_class)
+            box_dict['pred_rel_labels'] = rel_labels # (#rel, )
+            
+            # Additional debug for the first image in batch
+            if i == 0 and torch.distributed.get_rank() == 0 if torch.distributed.is_initialized() else True:
+                if rel_pair_idx.shape[0] > 0:
+                    best_idx = 0
+                    s_idx = rel_pair_idx[best_idx, 0].item()
+                    o_idx = rel_pair_idx[best_idx, 1].item()
+                    r_lab = rel_labels[best_idx].item()
+                    # Check for self-relations that might have leaked
+                    if s_idx == o_idx:
+                         print(f"WARN: Self-relation detected in PostProcessor: {s_idx}->{o_idx}")
+                    
+            results.append(box_dict)
         return results
     
 
@@ -146,6 +168,7 @@ class HierarchPostProcessor(nn.Module):
             attribute_on,
             use_gt_box=False,
             later_nms_pred_thres=0.3,
+            rel_topk=1000,
     ):
         """
         Arguments:
@@ -155,6 +178,7 @@ class HierarchPostProcessor(nn.Module):
         self.attribute_on = attribute_on
         self.use_gt_box = use_gt_box
         self.later_nms_pred_thres = later_nms_pred_thres
+        self.rel_topk = rel_topk
         self.geo_label = [1, 2, 3, 4, 5, 6, 8, 10, 22, 23, 29, 31, 32, 33, 43]
         self.pos_label = [9, 16, 17, 20, 27, 30, 36, 42, 48, 49, 50]
         self.sem_label = [7, 11, 12, 13, 14, 15, 18, 19, 21, 24, 25, 26, 28, 34, 35, 37, 38, 39, 40, 41, 44, 45, 46, 47]
@@ -198,7 +222,7 @@ class HierarchPostProcessor(nn.Module):
                 obj_pred = obj_pred + 1
             else:
                 # NOTE: by kaihua, apply late nms for object prediction
-                obj_pred = obj_prediction_nms(box.get_field('boxes_per_cls'),
+                obj_pred = obj_prediction_nms(box['boxes_per_cls'],
                                               obj_logit,
                                               self.later_nms_pred_thres)
                 obj_score_ind = torch.arange(num_obj_bbox,
@@ -210,18 +234,19 @@ class HierarchPostProcessor(nn.Module):
             device = obj_class.device
 
             if self.use_gt_box:
-                boxlist = box
+                box_dict = box.copy()
             else:
                 # mode==sgdet
                 # apply regression based on finetuned object class
                 batch_size = obj_class.shape[0]
                 regressed_box_idxs = obj_class
-                boxlist = BoxList(
-                    box.get_field('boxes_per_cls')[torch.arange(batch_size,
-                                                                device=device), regressed_box_idxs],
-                    box.size, 'xyxy')
-            boxlist.add_field('pred_labels', obj_class)  # (#obj, )
-            boxlist.add_field('pred_scores', obj_scores)  # (#obj, )
+                box_dict = {
+                    "boxes": box['boxes_per_cls'][torch.arange(batch_size, device=device), regressed_box_idxs],
+                    "image_size": box["image_size"],
+                    "mode": 'xyxy'
+                }
+            box_dict['pred_labels'] = obj_class
+            box_dict['pred_scores'] = obj_scores
 
             # sorting triples according to score production
             obj_scores0 = obj_scores[rel_pair_idx[:, 0]]
@@ -253,6 +278,11 @@ class HierarchPostProcessor(nn.Module):
 
             triple_scores = cat_scores * cat_obj_score0 * cat_obj_score1
             _, sorting_idx = torch.sort(triple_scores.view(-1), dim=0, descending=True)
+            
+            # Truncate to top K relations to avoid memory blow-up during evaluation
+            if not self.training and self.rel_topk > 0:
+                sorting_idx = sorting_idx[:self.rel_topk]
+
             rel_pair_idx = cat_rel_pair_idx[sorting_idx]
             rel_class_prob = cat_class_prob[sorting_idx]
             rel_labels = cat_labels[sorting_idx]
@@ -269,26 +299,34 @@ class HierarchPostProcessor(nn.Module):
             # rel_labels = rel_labels[sorting_idx]
             #############################################################
 
-            boxlist.add_field('rel_pair_idxs', rel_pair_idx)  # (#rel, 2)
-            boxlist.add_field('pred_rel_scores', rel_class_prob)  # (#rel, #rel_class)
-            boxlist.add_field('pred_rel_labels', rel_labels)  # (#rel, )
+            box_dict['rel_pair_idxs'] = rel_pair_idx  # (#rel, 2)
+            box_dict['pred_rel_scores'] = rel_class_prob  # (#rel, #rel_class)
+            box_dict['pred_rel_labels'] = rel_labels  # (#rel, )
 
             # should have fields : rel_pair_idxs, pred_rel_class_prob, pred_rel_labels, pred_labels, pred_scores
-            results.append(boxlist)
+            results.append(box_dict)
         return results
 
 
 def make_roi_relation_post_processor(cfg):
-    attribute_on = cfg.MODEL.ATTRIBUTE_ON
-    use_gt_box = cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX
-    proposals_as_gt = cfg.MODEL.BACKBONE.FREEZE
-    later_nms_pred_thres = cfg.TEST.RELATION.LATER_NMS_PREDICTION_THRES
+    attribute_on = cfg.model.attribute_on
+    use_gt_box = cfg.model.roi_relation_head.use_gt_box
+    # For heads that don't refine object logits, we treat proposals as GT for the
+    # post-processor to skip refinement unpacking.
+    # DeformableRelationHead, QueryFeatureExtractor, PatchFeatureExtractor and RelTRHead
+    # all output only relation logits (no refined object scores), so they always use
+    # proposals_as_gt=True regardless of backbone freeze state.
+    _no_refine_heads = {"QueryFeatureExtractor", "PatchFeatureExtractor", "RelTRHead", "DeformableRelationHead", "EfficientRelationHead", "AttentionRelationHead", "REACTV2Head"}
+    proposals_as_gt = True #cfg.model.roi_relation_head.feature_extractor in _no_refine_heads
+    later_nms_pred_thres = cfg.test.relation.later_nms_prediction_thres
+    rel_topk = cfg.test.top_k
 
-    if "Hierarchical" in cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR:
+    if "Hierarchical" in cfg.model.roi_relation_head.predictor:
         postprocessor = HierarchPostProcessor(
             attribute_on,
             use_gt_box,
             later_nms_pred_thres,
+            rel_topk,
         )
     else:
         postprocessor = PostProcessor(
@@ -296,5 +334,6 @@ def make_roi_relation_post_processor(cfg):
             use_gt_box,
             proposals_as_gt,
             later_nms_pred_thres,
+            rel_topk,
         )
     return postprocessor

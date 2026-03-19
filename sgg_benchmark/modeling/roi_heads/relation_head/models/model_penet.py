@@ -10,22 +10,22 @@ from ..models.utils.utils_motifs import to_onehot, encode_box_info
 from .utils.utils_relation import nms_per_cls
 
 class PENetContext(nn.Module):
-    def __init__(self, config, obj_classes, rel_classes, in_channels, dropout_p=0.2):
+    def __init__(self, cfg, obj_classes, rel_classes, in_channels, dropout_p=0.2):
         super().__init__()        
 
         self.num_obj_classes = len(obj_classes)
         self.num_rel_cls = len(rel_classes)
-        self.cfg = config
+        self.cfg = cfg
 
-        self.pooling_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
-        self.hidden_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
+        self.pooling_dim = self.cfg.model.roi_relation_head.context_pooling_dim
+        self.hidden_dim = self.cfg.model.roi_relation_head.context_hidden_dim
 
-        self.mlp_dim = self.cfg.MODEL.ROI_RELATION_HEAD.MLP_HEAD_DIM
+        self.mlp_dim = self.cfg.model.roi_relation_head.mlp_head_dim
         self.post_emb = nn.Linear(in_channels, self.mlp_dim * 2)  
 
-        self.embed_dim = self.cfg.MODEL.ROI_RELATION_HEAD.EMBED_DIM
+        self.embed_dim = self.cfg.model.roi_relation_head.embed_dim
         
-        obj_embed_vecs = obj_edge_vectors(obj_classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=self.embed_dim)  # load Glove for objects
+        obj_embed_vecs = obj_edge_vectors(obj_classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=self.embed_dim)  # load Glove for objects
         self.obj_embed = nn.Embedding(self.num_obj_classes, self.embed_dim)
         with torch.no_grad():
             self.obj_embed.weight.copy_(obj_embed_vecs, non_blocking=True)
@@ -61,15 +61,15 @@ class PENetContext(nn.Module):
         with torch.no_grad():
             self.obj_embed1.weight.copy_(obj_embed_vecs, non_blocking=True)
 
-        self.out_obj = make_fc(self.hidden_dim, self.num_obj_classes) 
-        self.lin_obj_cyx = make_fc(in_channels+ self.embed_dim + 128, self.hidden_dim)
+        self.out_obj = make_fc(self.cfg, self.hidden_dim, self.num_obj_classes) 
+        self.lin_obj_cyx = make_fc(self.cfg, in_channels+ self.embed_dim + 128, self.hidden_dim)
         
-        self.nms_thresh = self.cfg.TEST.RELATION.LATER_NMS_PREDICTION_THRES
+        self.nms_thresh = self.cfg.test.relation.later_nms_prediction_thres
 
-        self.obj_decode = not (self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX or self.cfg.MODEL.BACKBONE.FREEZE)
+        self.obj_decode = not (self.cfg.model.roi_relation_head.use_gt_box or self.cfg.model.backbone.freeze)
 
-        self.use_text_features_only = self.cfg.MODEL.ROI_RELATION_HEAD.TEXTUAL_FEATURES_ONLY
-        self.use_visual_features_only = self.cfg.MODEL.ROI_RELATION_HEAD.VISUAL_FEATURES_ONLY
+        self.use_text_features_only = self.cfg.model.roi_relation_head.textual_features_only
+        self.use_visual_features_only = self.cfg.model.roi_relation_head.visual_features_only
 
     def forward(self, roi_features, proposals, rel_pair_idxs, logger=None):
         # refine object labels
@@ -141,7 +141,7 @@ class PENetContext(nn.Module):
         return entity_dists, entity_preds, fusion_so, None
     
     def encode_obj_labels(self, proposals):
-        obj_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
+        obj_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
         obj_labels = obj_labels.long()
         obj_dists = to_onehot(obj_labels, self.num_obj_classes)
         return obj_dists, obj_labels
@@ -150,19 +150,19 @@ class PENetContext(nn.Module):
         pos_embed = self.pos_embed(encode_box_info(proposals))
 
         # label/logits embedding will be used as input
-        obj_logits = cat([proposal.get_field("predict_logits") for proposal in proposals], dim=0).detach()
+        obj_logits = cat([proposal["predict_logits"] for proposal in proposals], dim=0).detach()
         obj_embed = F.softmax(obj_logits, dim=1) @ self.obj_embed1.weight
 
-        assert proposals[0].mode == 'xyxy'
+        assert proposals[0]["mode"] == 'xyxy'
 
         pos_embed = self.pos_embed(encode_box_info(proposals))
-        num_objs = [len(p) for p in proposals]
+        num_objs = [len(p["boxes"]) for p in proposals]
         obj_pre_rep_for_pred = self.lin_obj_cyx(cat([roi_features, obj_embed, pos_embed], -1))
 
         obj_dists = self.out_obj(obj_pre_rep_for_pred)
         use_decoder_nms = not self.training
         if use_decoder_nms:
-            boxes_per_cls = [proposal.get_field('boxes_per_cls') for proposal in proposals]
+            boxes_per_cls = [proposal["boxes_per_cls"] for proposal in proposals]
             obj_preds = nms_per_cls(obj_dists, boxes_per_cls, num_objs, self.nms_thresh).long()
         else:
             obj_preds = (obj_dists[:, 1:].max(1)[1] + 1).long()

@@ -9,21 +9,21 @@ from ultralytics.nn.tasks import attempt_load_one_weight
 from ultralytics.utils import ops
 from ultralytics.engine.results import Results
 
-from sgg_benchmark.structures.bounding_box import BoxList
-
 import numpy as np
 from PIL import Image
 
 
 class RTDetr(DetectionModel):
     def __init__(self, cfg, ch=3, nc=None, verbose=True):  # model, input channels, number of classes
-        yolo_cfg = cfg.MODEL.YOLO.SIZE+'.yaml'
+        yolo_cfg = cfg.model.yolo.size+'.yaml'
         super().__init__(yolo_cfg, nc=nc, verbose=verbose)
         # self.features_layers = [len(self.model) - 2]
-        self.conf_thres = cfg.MODEL.BACKBONE.NMS_THRESH
-        self.iou_thres = cfg.MODEL.ROI_HEADS.NMS
-        self.device = cfg.MODEL.DEVICE
-        self.input_size = cfg.INPUT.MIN_SIZE_TRAIN
+        self.conf_thres = cfg.model.backbone.nms_thresh
+        self.iou_thres = cfg.model.roi_heads.nms
+        self.device = cfg.model.device
+        self.input_size = cfg.input.img_size  # (W, H)
+        self.input_w = int(self.input_size[0])
+        self.input_h = int(self.input_size[1])
         self.nc = nc
 
     def forward(self, x, profile=False, visualize=False, embed=None):
@@ -101,7 +101,7 @@ class RTDetr(DetectionModel):
             orig_imgs = ops.convert_torch2numpy_batch(orig_imgs)
     
         # get model input size
-        imgsz = (self.input_size, self.input_size)
+        imgsz = (self.input_h, self.input_w)
         results = []
         for i, pred in enumerate(preds):
             orig_img = orig_imgs[i]
@@ -129,20 +129,21 @@ class RTDetr(DetectionModel):
             pred[..., [0, 2]] *= ow
             pred[..., [1, 3]] *= oh
 
-            boxlist = BoxList(pred[:, :4], out_img_size, mode="xyxy")
-
             scores = pred[:, 4]
             labels = pred[:, 5].long()
-            boxlist.add_field("pred_labels", labels.detach().clone())
-            # add 1 to all labels to account for background class, for rel pred
-            labels += 1
-            # resize
-            boxlist.add_field("pred_scores", scores)
-            boxlist.add_field("labels", labels)
+            
+            box_dict = {
+                "boxes": pred[:, :4],
+                "image_size": out_img_size,
+                "mode": "xyxy",
+                "pred_labels": labels.detach().clone(),
+                "pred_scores": scores,
+                "labels": labels + 1
+            }
 
-            assert len(boxlist.get_field("pred_labels")) == len(boxlist.get_field("pred_scores"))
+            assert len(box_dict["pred_labels"]) == len(box_dict["pred_scores"])
 
-            results.append(boxlist)
+            results.append(box_dict)
 
         return results
 

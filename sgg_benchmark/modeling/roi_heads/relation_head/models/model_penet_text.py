@@ -17,14 +17,14 @@ class PENetContext(nn.Module):
         self.num_rel_cls = len(rel_classes)
         self.cfg = config
 
-        self.pooling_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
-        self.hidden_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
+        self.pooling_dim = self.cfg.model.roi_relation_head.context_pooling_dim
+        self.hidden_dim = self.cfg.model.roi_relation_head.context_hidden_dim
 
-        self.mlp_dim = self.cfg.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM
+        self.mlp_dim = self.cfg.model.roi_box_head.mlp_head_dim
 
-        self.embed_dim = self.cfg.MODEL.ROI_RELATION_HEAD.EMBED_DIM
+        self.embed_dim = self.cfg.model.roi_relation_head.embed_dim
         
-        obj_embed_vecs = obj_edge_vectors(obj_classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=self.embed_dim)  # load Glove for objects
+        obj_embed_vecs = obj_edge_vectors(obj_classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=self.embed_dim)  # load Glove for objects
         self.obj_embed = nn.Embedding(self.num_obj_classes, self.embed_dim)
         with torch.no_grad():
             self.obj_embed.weight.copy_(obj_embed_vecs, non_blocking=True)
@@ -76,7 +76,7 @@ class PENetContext(nn.Module):
         return entity_dists, entity_preds, fusion_so, None
     
     def encode_obj_labels(self, proposals):
-        obj_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
+        obj_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
         obj_labels = obj_labels.long()
         obj_dists = to_onehot(obj_labels, self.num_obj_classes)
         return obj_dists, obj_labels

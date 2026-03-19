@@ -1,0 +1,152 @@
+# @package _global_
+# MotifPredictor.yaml — Backward-compatibility test: Motif (Neural Motifs) on PSG
+# ════════════════════════════════════════════════════════════════════════════
+# Architecture : YOLOV8FeatureExtractor (RoI Align 7×7) + RelationFeatureExtractor
+# Relation head: MotifPredictor (LSTM-based context encoding)
+# Dataset      : PSG — 133 object classes, 57 relation classes
+
+output_dir: "./checkpoints/PSG/motif_compat_test"
+glove_dir: "datasets/"          # contains glove.6B.200d.txt
+
+seed: 42
+metric_to_track: "mR"
+dtype: "float32"
+verbose: "INFO"
+
+input:
+  img_size: [640, 640]  # [W, H]
+  pixel_mean: [102.9801, 115.9465, 122.7717]
+  pixel_std: [1.0, 1.0, 1.0]
+  to_bgr255: true
+  flip_prob_train: 0.5
+  padding: true
+  brightness: 0.0
+  contrast: 0.0
+  saturation: 0.0
+  hue: 0.0
+  vertical_flip_prob_train: 0.0
+
+datasets:
+  name: "PSG"
+  type: "coco"
+  data_dir: "datasets/PSG/coco_format"
+
+dataloader:
+  num_workers: 8
+  size_divisibility: 32
+  aspect_ratio_grouping: true
+
+model:
+  relation_on: true
+  device: "cuda"
+  meta_architecture: "GeneralizedYOLO"
+  pretrained_detector_ckpt: "checkpoints/BACKBONES/yolov8m_psg.pt"
+  box_head: false
+
+  backbone:
+    type: "yolo"
+    nms_thresh: 0.001
+    freeze: true
+    freeze_at: 10
+
+  yolo:
+    size: "yolov8m"
+    out_channels: [192, 384, 576]
+
+  roi_box_head:
+    feature_extractor: "YOLOV8FeatureExtractor"
+    pooler_resolution: 7
+    pooler_sampling_ratio: 2
+    pooler_scales: [0.125, 0.0625, 0.03125]
+    mlp_head_dim: 4096
+    num_classes: 133
+
+  roi_heads:
+    fg_iou_threshold: 0.3
+    bg_iou_threshold: 0.1
+    nms: 0.2
+    detections_per_img: 100
+    nms_filter_duplicates: true
+
+  roi_relation_head:
+    predictor: "MotifPredictor"
+    feature_extractor: "RelationFeatureExtractor"
+
+    num_classes: 57
+
+    context_hidden_dim: 512
+    context_pooling_dim: 4096
+    context_dropout_rate: 0.2
+
+    use_union_features: true
+    use_spatial_features: true
+    use_union_features_inference: true
+
+    batch_size_per_image: 1024
+    positive_fraction: 0.25
+    num_sample_per_gt_rel: 4
+    require_box_overlap: false
+    add_gtbox_to_proposal_in_train: true
+
+    use_gt_box: false
+    use_gt_object_label: false
+
+    use_frequency_bias: false
+
+    loss:
+      loss_type: "CrossEntropyLoss"
+
+    causal:
+      effect_type: "none" # 'TDE', 'NIE', 'TE', 'none'
+      fusion_type: "sum" # 'gate', 'sum'
+      separate_spatial: False
+      context_layer: "motifs"
+      effect_analysis: True
+
+solver:
+  max_epoch: 20
+  base_lr: 0.01
+  bias_lr_factor: 1
+  momentum: 0.9
+  weight_decay: 0.0001
+  weight_decay_bias: 0.0
+  gamma: 0.5
+  warmup_factor: 0.1
+  warmup_epochs: 1
+  warmup_method: "linear"
+  checkpoint_period: 500
+  grad_norm_clip: 5.0
+  accum_steps: 1
+  print_grad_freq: 250
+  pre_val: true
+  val_period: 500
+  ims_per_batch: 8
+  optimizer: "ADAMW"
+
+  schedule:
+    type: "WarmupCosineAnnealingIterLR"  # WarmupMultiStepLR, WarmupReduceLROnPlateau
+    eta_min: 1.0e-6
+
+test:
+  ims_per_batch: 1
+  detections_per_img: 100
+  informative: false
+
+  bbox_aug:
+    enabled: false
+    h_flip: false
+    scales: []
+    max_size: 4000
+    scale_h_flip: false
+
+  save_proposals: false
+
+  relation:
+    multiple_preds: false
+    iou_threshold: 0.5
+    require_overlap: true
+    later_nms_prediction_thres: 0.5
+    sync_gather: true
+
+  allow_load_from_cache: false
+  top_k: 100

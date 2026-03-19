@@ -1,11 +1,11 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 import torch
 from torch.nn import functional as F
+from typing import List, Dict, Any
 
 from sgg_benchmark.layers import smooth_l1_loss
 from sgg_benchmark.modeling.box_coder import BoxCoder
 from sgg_benchmark.modeling.matcher import Matcher
-from sgg_benchmark.structures.boxlist_ops import boxlist_iou
+from sgg_benchmark.structures.box_ops import box_iou
 from sgg_benchmark.modeling.balanced_positive_negative_sampler import (
     BalancedPositiveNegativeSampler
 )
@@ -21,29 +21,23 @@ class FastRCNNLossComputation(object):
     def __init__(self, cls_agnostic_bbox_reg=False):
         self.cls_agnostic_bbox_reg = cls_agnostic_bbox_reg
 
-    def assign_label_to_proposals(self, proposals, targets, attris):
+    def assign_label_to_proposals(self, proposals: List[Dict[str, Any]], targets: List[Dict[str, Any]], attris):
         for img_idx, (target, proposal) in enumerate(zip(targets, proposals)):
-            match_quality_matrix = boxlist_iou(target, proposal)
+            match_quality_matrix = box_iou(target["boxes"], proposal["boxes"], target["mode"], proposal["mode"])
             matched_idxs = self.proposal_matcher(match_quality_matrix)
-            # Fast RCNN only need "labels" field for selecting the targets
-            if attris:
-                target = target.copy_with_fields(["labels", "attributes"])
-            else:
-                target = target.copy_with_fields(["labels"])
-                
-            matched_targets = target[matched_idxs.clamp(min=0)]
-            labels_per_image = matched_targets.get_field("labels").to(dtype=torch.int64)
+            
+            labels_per_image = target["labels"][matched_idxs.clamp(min=0)].clone().to(dtype=torch.int64)
             labels_per_image[matched_idxs < 0] = 0
-            proposals[img_idx].add_field("labels", labels_per_image)
+            proposals[img_idx]["labels"] = labels_per_image
 
-            if attris:
-                attris_per_image = matched_targets.get_field("attributes").to(dtype=torch.int64)
+            if attris and "attributes" in target:
+                attris_per_image = target["attributes"][matched_idxs.clamp(min=0)].clone().to(dtype=torch.int64)
                 attris_per_image[matched_idxs < 0, :] = 0
-                proposals[img_idx].add_field("attributes", attris_per_image)
+                proposals[img_idx]["attributes"] = attris_per_image
         return proposals
 
 
-    def __call__(self, class_logits, box_regression, proposals):
+    def __call__(self, class_logits, box_regression, proposals: List[Dict[str, Any]]):
         """
         Computes the loss for Faster R-CNN.
         This requires that the subsample method has been called beforehand.
@@ -51,7 +45,7 @@ class FastRCNNLossComputation(object):
         Arguments:
             class_logits (list[Tensor])
             box_regression (list[Tensor])
-            proposals (list[BoxList])
+            proposals (list[Dict])
 
         Returns:
             classification_loss (Tensor)
@@ -62,8 +56,8 @@ class FastRCNNLossComputation(object):
         box_regression = cat(box_regression, dim=0)
         device = class_logits.device
 
-        labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
-        regression_targets = cat([proposal.get_field("regression_targets") for proposal in proposals], dim=0)
+        labels = cat([proposal["labels"] for proposal in proposals], dim=0)
+        regression_targets = cat([proposal["regression_targets"] for proposal in proposals], dim=0)
 
         classification_loss = F.cross_entropy(class_logits, labels.long())
 
@@ -89,7 +83,7 @@ class FastRCNNLossComputation(object):
 
 
 def make_roi_box_loss_evaluator(cfg):
-    cls_agnostic_bbox_reg = cfg.MODEL.CLS_AGNOSTIC_BBOX_REG
+    cls_agnostic_bbox_reg = cfg.model.cls_agnostic_bbox_reg
 
     loss_evaluator = FastRCNNLossComputation(cls_agnostic_bbox_reg)
 

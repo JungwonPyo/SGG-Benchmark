@@ -36,29 +36,30 @@ class BasePredictor(nn.Module):
 
         self.pred_freq = self.statistics['pred_freq']
 
-        self.attribute_on = config.MODEL.ATTRIBUTE_ON
+        self.attribute_on = self.cfg.model.attribute_on
 
-        self.num_obj_cls = self.cfg.MODEL.ROI_BOX_HEAD.NUM_CLASSES
-        self.num_att_cls = config.MODEL.ROI_ATTRIBUTE_HEAD.NUM_ATTRIBUTES
-        self.num_rel_cls = self.cfg.MODEL.ROI_RELATION_HEAD.NUM_CLASSES
-        self.use_bias = self.cfg.MODEL.ROI_RELATION_HEAD.USE_FREQUENCY_BIAS
+        self.num_obj_cls = self.cfg.model.roi_box_head.num_classes
+        self.num_att_cls = self.cfg.model.roi_attribute_head.num_attributes
+        self.num_rel_cls = self.cfg.model.roi_relation_head.num_classes
+        
+        self.use_bias = self.cfg.model.roi_relation_head.use_frequency_bias
 
         assert in_channels is not None
 
-        self.hidden_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.pooling_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
-        self.use_vision = self.cfg.MODEL.ROI_RELATION_HEAD.USE_UNION_FEATURES or self.cfg.MODEL.ROI_RELATION_HEAD.USE_SPATIAL_FEATURES
+        self.hidden_dim = self.cfg.model.roi_relation_head.context_hidden_dim
+        self.pooling_dim = self.cfg.model.roi_relation_head.context_pooling_dim
+        self.use_vision = self.cfg.model.roi_relation_head.use_union_features or self.cfg.model.roi_relation_head.use_spatial_features
 
         # mode
-        if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
-            if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
+        if self.cfg.model.roi_relation_head.use_gt_box:
+            if self.cfg.model.roi_relation_head.use_gt_object_label:
                 self.mode = "predcls"
             else:
                 self.mode = "sgcls"
         else:
             self.mode = "sgdet"
 
-        self.freeze_backbone = self.cfg.MODEL.BACKBONE.FREEZE
+        self.freeze_backbone = self.cfg.model.backbone.freeze
         self.obj_decode = not (self.freeze_backbone or self.mode == "predcls")
 
         if self.use_bias:
@@ -74,9 +75,9 @@ class IMPPredictor(BasePredictor):
 
         self.context_layer = IMPContext(config, self.num_obj_cls, self.num_rel_cls, in_channels)
 
-        if self.pooling_dim != config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM:
+        if self.pooling_dim != self.cfg.model.roi_box_head.mlp_head_dim:
             self.union_single_not_match = True
-            self.up_dim = nn.Linear(config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM, self.pooling_dim)
+            self.up_dim = nn.Linear(self.cfg.model.roi_box_head.mlp_head_dim, self.pooling_dim)
             layer_init(self.up_dim, xavier=True)
         else:
             self.union_single_not_match = False
@@ -97,7 +98,7 @@ class IMPPredictor(BasePredictor):
         # encode context infomation
         obj_dists, rel_dists = self.context_layer(roi_features, proposals, union_features, rel_pair_idxs, logger)
 
-        num_objs = [len(b) for b in proposals]
+        num_objs = [b["boxes"].shape[0] if isinstance(b, dict) else len(b) for b in proposals]
         num_rels = [r.shape[0] for r in rel_pair_idxs]
         assert len(num_rels) == len(num_objs)
 
@@ -141,9 +142,9 @@ class TransformerPredictor(BasePredictor):
         layer_init(self.ctx_compress, xavier=True)
         layer_init(self.post_cat, xavier=True)
         
-        if self.pooling_dim != config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM:
+        if self.pooling_dim != self.cfg.model.roi_box_head.mlp_head_dim:
             self.union_single_not_match = True
-            self.up_dim = nn.Linear(config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM, self.pooling_dim)
+            self.up_dim = nn.Linear(self.cfg.model.roi_box_head.mlp_head_dim, self.pooling_dim)
             layer_init(self.up_dim, xavier=True)
         else:
             self.union_single_not_match = False
@@ -168,7 +169,7 @@ class TransformerPredictor(BasePredictor):
         tail_rep = edge_rep[:, 1].contiguous().view(-1, self.hidden_dim)
 
         num_rels = [r.shape[0] for r in rel_pair_idxs]
-        num_objs = [len(b) for b in proposals]
+        num_objs = [b["boxes"].shape[0] if isinstance(b, dict) else len(b) for b in proposals]
         assert len(num_rels) == len(num_objs)
 
         head_reps = head_rep.split(num_objs, dim=0)
@@ -237,9 +238,9 @@ class MotifPredictor(BasePredictor):
         layer_init(self.post_cat, xavier=True)
         layer_init(self.rel_compress, xavier=True)
         
-        if self.pooling_dim != config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM:
+        if self.pooling_dim != self.cfg.model.roi_box_head.mlp_head_dim:
             self.union_single_not_match = True
-            self.up_dim = nn.Linear(config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM, self.pooling_dim)
+            self.up_dim = nn.Linear(self.cfg.model.roi_box_head.mlp_head_dim, self.pooling_dim)
             layer_init(self.up_dim, xavier=True)
         else:
             self.union_single_not_match = False
@@ -252,7 +253,7 @@ class MotifPredictor(BasePredictor):
             rel_pair_idxs (list[Tensor]): (num_rel, 2) index of subject and object
             union_features (Tensor): (batch_num_rel, context_pooling_dim): visual union feature of each pair
         """
-        num_objs = [len(b) for b in proposals]
+        num_objs = [b["boxes"].shape[0] if isinstance(b, dict) else len(b) for b in proposals]
         # encode context infomation
         if self.attribute_on:
             obj_dists, obj_preds, att_dists, edge_ctx = self.context_layer(roi_features, proposals, logger)
@@ -329,9 +330,9 @@ class VCTreePredictor(BasePredictor):
         layer_init(self.post_emb, 10.0 * (1.0 / self.hidden_dim) ** 0.5, normal=True)
         layer_init(self.post_cat, xavier=True)
         
-        if self.pooling_dim != config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM:
+        if self.pooling_dim != self.cfg.model.roi_box_head.mlp_head_dim:
             self.union_single_not_match = True
-            self.up_dim = nn.Linear(config.MODEL.ROI_BOX_HEAD.MLP_HEAD_DIM, self.pooling_dim)
+            self.up_dim = nn.Linear(self.cfg.model.roi_box_head.mlp_head_dim, self.pooling_dim)
             layer_init(self.up_dim, xavier=True)
         else:
             self.union_single_not_match = False
@@ -355,7 +356,7 @@ class VCTreePredictor(BasePredictor):
         tail_rep = edge_rep[:, 1].contiguous().view(-1, self.hidden_dim)
 
         num_rels = [r.shape[0] for r in rel_pair_idxs]
-        num_objs = [len(b) for b in proposals]
+        num_objs = [b["boxes"].shape[0] if isinstance(b, dict) else len(b) for b in proposals]
         assert len(num_rels) == len(num_objs)
 
         head_reps = head_rep.split(num_objs, dim=0)
@@ -420,7 +421,7 @@ class GPSNetPredictor(BasePredictor):
         self.use_obj_recls_logits = not self.freeze_backbone
 
         # post classification
-        self.rel_classifier = build_classifier(self.pooling_dim, self.num_rel_cls)
+        self.rel_classifier = build_classifier(self.cfg, self.pooling_dim, self.num_rel_cls)
 
         self.rel_classifier.reset_parameters()
 
@@ -517,7 +518,7 @@ class SquatPredictor(BasePredictor):
         
         if not self.obj_decode:
             obj_labels = cat(
-                [proposal.get_field("labels") for proposal in inst_proposals], dim=0
+                [proposal["labels"] for proposal in inst_proposals], dim=0
             )
             refined_obj_logits = to_onehot(obj_labels, self.num_obj_cls)
         else:
@@ -530,11 +531,11 @@ class SquatPredictor(BasePredictor):
         # using the object results, update the pred label and logits
         if self.obj_decode:
             obj_pred_logits = cat(
-                [each_prop.get_field("predict_logits") for each_prop in inst_proposals], dim=0
+                [each_prop["predict_logits"] for each_prop in inst_proposals], dim=0
             )
 
             boxes_per_cls = cat(
-                [proposal.get_field("boxes_per_cls") for proposal in inst_proposals], dim=0
+                [proposal["boxes_per_cls"] for proposal in inst_proposals], dim=0
             )  # comes from post process of box_head
             # here we use the logits refinements by adding
             if self.obj_recls_logits_update_manner == "add":
@@ -547,7 +548,7 @@ class SquatPredictor(BasePredictor):
             obj_pred_labels = refined_obj_pred_labels
         else:
             obj_pred_labels = cat(
-                [each_prop.get_field("labels") for each_prop in inst_proposals], dim=0
+                [each_prop["labels"] for each_prop in inst_proposals], dim=0
             )
             obj_pred_logits = refined_obj_logits
             
@@ -608,18 +609,18 @@ class VETOPredictor(BasePredictor):
         self.use_norm = False
         self.pcpl = False
 
-        self.FC_SIZE_CLASS = self.cfg.MODEL.ROI_RELATION_HEAD.VETOTRANSFORMER.T_INPUT_DIM
-        self.FC_SIZE_LOC = self.cfg.MODEL.ROI_RELATION_HEAD.VETOTRANSFORMER.T_INPUT_DIM
+        self.FC_SIZE_CLASS = self.cfg.model.roi_relation_head.vetotransformer.t_input_dim
+        self.FC_SIZE_LOC = self.cfg.model.roi_relation_head.vetotransformer.t_input_dim
         self.LOC_INPUT_SIZE = 256
-        self.obj_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
-        self.embed_dim = self.cfg.MODEL.ROI_RELATION_HEAD.EMBED_DIM
+        self.obj_dim = self.cfg.model.roi_relation_head.context_pooling_dim
+        self.embed_dim = self.cfg.model.roi_relation_head.embed_dim
         self.use_embed = False
         self.obj_embed2 = nn.Embedding(self.num_obj_cls, self.embed_dim)
         # post decoding
-        self.hidden_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
-        self.pooling_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_POOLING_DIM
+        self.hidden_dim = self.cfg.model.roi_relation_head.context_hidden_dim
+        self.pooling_dim = self.cfg.model.roi_relation_head.context_pooling_dim
 
-        embed_vecs = obj_edge_vectors(self.obj_classes, wv_dir=self.cfg.GLOVE_DIR, wv_dim=self.embed_dim)
+        embed_vecs = obj_edge_vectors(self.obj_classes, wv_dir=self.cfg.glove_dir, wv_dim=self.embed_dim)
         self.obj_embed = nn.Embedding(len(self.obj_classes), self.embed_dim)
         classme_input_dim = 200  # 151 #self.embed_dim if self.use_embed else len(self.obj_classes)
         self.class_projection = nn.Sequential(
@@ -648,10 +649,14 @@ class VETOPredictor(BasePredictor):
             nn.ReLU(inplace=True))
 
         self.fusion_transformer = VETOTransformer(config=config, in_channels=256)
-        features_size = self.cfg.MODEL.ROI_RELATION_HEAD.VETOTRANSFORMER.T_INPUT_DIM
+        features_size = self.cfg.model.roi_relation_head.vetotransformer.t_input_dim
         # -- Final FC layer which predicts the relations
         self.rel_out = xavier_init(nn.Linear(features_size, self.num_rel_cls, bias=True))
-        self.beta_loss = self.cfg.GLOBAL_SETTING.BETA_LOSS
+        # Optional class reweighting using Beta distribution; default to False if not configured
+        try:
+            self.beta_loss = bool(self.cfg.global_setting.beta_loss)
+        except Exception:
+            self.beta_loss = False
         if self.beta_loss:
             rel_counts = self.statistics['pred_freq']
             rel_counts[::-1].sort()
@@ -674,7 +679,7 @@ class VETOPredictor(BasePredictor):
                     roi_depth_features=None, rel_binarys=None):
 
             if self.mode == "predcls":
-                obj_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
+                obj_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
             else:
                 obj_labels = None
 
@@ -684,8 +689,8 @@ class VETOPredictor(BasePredictor):
                 obj_dists = F.one_hot(obj_labels.long(), self.num_obj_cls).float()
 
             else:
-                obj_logits = cat([proposal.get_field("predict_logits") for proposal in proposals], dim=0).detach()
-                obj_labels = cat([proposal.get_field("pred_labels") for proposal in proposals], dim=0).detach()
+                obj_logits = cat([proposal["predict_logits"] for proposal in proposals], dim=0).detach()
+                obj_labels = cat([proposal["pred_labels"] for proposal in proposals], dim=0).detach()
                 obj_dists = F.one_hot(obj_labels.long(), self.num_obj_cls).float()
                 obj_embed = F.softmax(obj_logits, dim=1) @ self.obj_embed.weight
 
@@ -694,7 +699,8 @@ class VETOPredictor(BasePredictor):
             else:
                 centor_proposals = proposals
 
-            pos_embed = self.pos_embed(cat([art.center_xywh(p.bbox) for p in centor_proposals], dim=0))
+            # Use xywh boxes directly for positional embedding (expects 4-dim input)
+            pos_embed = self.pos_embed(cat([p["boxes"] for p in centor_proposals], dim=0))
 
             proposal_count_per_img = [len(x) for x in proposals]
             rel_count_per_img = [len(x) for x in rel_pair_idxs]
@@ -723,7 +729,7 @@ class VETOPredictor(BasePredictor):
             add_losses = {}
             if self.training:
                 if self.mode != "predcls":
-                    fg_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
+                    fg_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
                     loss_refine_obj = self.criterion_loss(obj_dists, fg_labels.long())
                     add_losses['obj_loss'] = loss_refine_obj
                 rel_labels = cat(rel_labels, dim=0)

@@ -349,24 +349,24 @@ def make_target(targets, cfg, num_proposals=300, use_focal=True, fg_triplet_rate
         pure_ent_hungarian_targets = list()
         images_whwh = list()
         for i, target in enumerate(targets):
-            #print(target.bbox)
+            #print(target["boxes"])
             
-            #bbox = target.bbox
+            #bbox = target["boxes"]
             #bbox = bbox.data.cpu().numpy()
-            bbox = target.bbox.data.cpu().numpy()
+            bbox = target["boxes"].data.cpu().numpy()
             
-            w, h = target.size
+            w, h = target["image_size"]
             if use_focal:
-                entity_label = target.get_field("labels").long().data.cpu().numpy() - 1
+                entity_label = target["labels"].long().data.cpu().numpy() - 1
             else:
-                entity_label = target.get_field("labels").long().data.cpu().numpy()
+                entity_label = target["labels"].long().data.cpu().numpy()
             if cfg.DEBUG.PURE_SPARSE_RCNN and \
               cfg.DEBUG.DUPLICATE_OBJ_BOXES:
                 bbox = np.tile(bbox, (3, 1))
                 entity_label = np.tile(entity_label, 3)
                 image_size_xyxy = np.array([w, h, w, h], dtype=bbox.dtype)
             else:
-                rel_matrix = target.get_field("relation").long().data.cpu().numpy()
+                rel_matrix = target["relation"].long().data.cpu().numpy()
                 sub_id, obj_id = np.where(rel_matrix > 0)
                 
                 if use_focal:
@@ -452,14 +452,14 @@ def make_target(targets, cfg, num_proposals=300, use_focal=True, fg_triplet_rate
             images_whwh.append(image_size_xyxy)
         
         images_whwh = np.stack(images_whwh)
-        images_whwh = torch.from_numpy(images_whwh).type_as(targets[0].bbox).to(targets[0].bbox.device)
+        images_whwh = torch.from_numpy(images_whwh).type_as(targets[0]["boxes"]).to(targets[0]["boxes"].device)
     return images_whwh, pure_ent_hungarian_targets, hungarian_targets, complem_hungarian_targets
 
 def add_predict_logits(proposals, class_logits):
     slice_idxs = [0]
     for i in range(len(proposals)):
-        slice_idxs.append(len(proposals[i])+slice_idxs[-1])
-        proposals[i].add_field("predict_logits", class_logits[slice_idxs[i]:slice_idxs[i+1]])
+        slice_idxs.append(len(proposals[i]["boxes"])+slice_idxs[-1])
+        proposals[i]["predict_logits"] = class_logits[slice_idxs[i]:slice_idxs[i+1]]
     return proposals
 
 class ROIBoxHead(torch.nn.Module):
@@ -469,6 +469,9 @@ class ROIBoxHead(torch.nn.Module):
 
     def __init__(self, cfg, in_channels):
         super(ROIBoxHead, self).__init__()
+        if not hasattr(cfg, 'clone'):
+            from sgg_benchmark.config import Config
+            cfg = Config(cfg)
         self.cfg = cfg.clone()
         self.use_relation_fusion = cfg.MODEL.SimrelRCNN.USE_RELATION_FUSION_FOR_OBJECT
         self.use_post_hungarian_loss = cfg.MODEL.SimrelRCNN.USE_HUNGARIAN_LOSS
@@ -1218,7 +1221,11 @@ class ROIBoxHead(torch.nn.Module):
             proposals = list()
             N = class_logits[-1].shape[0]
             for b in range(N):
-                proposals.append(BoxList(pred_bboxes[-1][b].view(-1, 4), tuple_img_size[b]))
+                proposals.append({
+                    "boxes": pred_bboxes[-1][b].view(-1, 4),
+                    "image_size": tuple_img_size[b],
+                    "mode": "xyxy",
+                })
             
             all_hit_targets_list = None
             if (self.training and targets is not None) or self.use_pure_sparsercnn_as_the_objdet_when_rel:
@@ -1265,10 +1272,16 @@ class ROIBoxHead(torch.nn.Module):
 
                 # if we want to save the proposals, we need sort them by confidence first.
                 if self.cfg.TEST.SAVE_PROPOSALS:
-                    _, sort_ind = result.get_field("pred_scores").view(-1).sort(dim=0, descending=True)
+                    # Assuming batch size 1 for simplicity of this debug feature
+                    res = result[0] if isinstance(result, list) else result
+                    _, sort_ind = res["pred_scores"].view(-1).sort(dim=0, descending=True)
                     x = x[sort_ind]
-                    result = result[sort_ind]
-                    result.add_field("features", x.cpu().numpy())
+                    from sgg_benchmark.structures.box_ops import filter_instances as select_boxlist
+                    result = [select_boxlist(r, sort_ind) for r in result] if isinstance(result, list) else select_boxlist(result, sort_ind)
+                    if isinstance(result, list):
+                        result[0]["features"] = x.cpu().numpy()
+                    else:
+                        result["features"] = x.cpu().numpy()
 
                 return x, result, {}
 

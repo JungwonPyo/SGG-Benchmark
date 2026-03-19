@@ -18,8 +18,8 @@ class VTransEFeature(nn.Module):
         self.num_obj_classes = len(obj_classes)
 
         # mode
-        if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
-            if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
+        if self.cfg.model.roi_relation_head.use_gt_box:
+            if self.cfg.model.roi_relation_head.use_gt_object_label:
                 self.mode = 'predcls'
             else:
                 self.mode = 'sgcls'
@@ -27,8 +27,8 @@ class VTransEFeature(nn.Module):
             self.mode = 'sgdet'
 
         # word embedding
-        self.embed_dim = self.cfg.MODEL.ROI_RELATION_HEAD.EMBED_DIM
-        obj_embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.MODEL.TEXT_EMBEDDING, wv_dir=self.cfg.GLOVE_DIR, wv_dim=self.embed_dim)
+        self.embed_dim = self.cfg.model.roi_relation_head.embed_dim
+        obj_embed_vecs = obj_edge_vectors(self.obj_classes, wv_type=self.cfg.model.text_embedding, wv_dir=self.cfg.glove_dir, wv_dim=self.embed_dim)
         self.obj_embed1 = nn.Embedding(self.num_obj_classes, self.embed_dim)
         self.obj_embed2 = nn.Embedding(self.num_obj_classes, self.embed_dim)
         with torch.no_grad():
@@ -43,15 +43,15 @@ class VTransEFeature(nn.Module):
 
         # object & relation context
         self.obj_dim = in_channels
-        self.dropout_rate = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_DROPOUT_RATE
-        self.hidden_dim = self.cfg.MODEL.ROI_RELATION_HEAD.CONTEXT_HIDDEN_DIM
+        self.dropout_rate = self.cfg.model.roi_relation_head.context_dropout_rate
+        self.hidden_dim = self.cfg.model.roi_relation_head.context_hidden_dim
 
-        self.pred_layer = make_fc(self.obj_dim + self.embed_dim + 128, self.num_obj_classes)
-        self.fc_layer = make_fc(self.obj_dim + self.embed_dim + 128, self.hidden_dim)
+        self.pred_layer = make_fc(self.cfg, self.obj_dim + self.embed_dim + 128, self.num_obj_classes)
+        self.fc_layer = make_fc(self.cfg, self.obj_dim + self.embed_dim + 128, self.hidden_dim)
         
         # untreated average features
         self.average_ratio = 0.0005
-        self.effect_analysis = config.MODEL.ROI_RELATION_HEAD.CAUSAL.EFFECT_ANALYSIS
+        self.effect_analysis = config.model.roi_relation_head.causal.effect_analysis
 
         if self.effect_analysis:
             self.register_buffer("untreated_obj_feat", torch.zeros(self.obj_dim + self.embed_dim + 128))
@@ -64,20 +64,20 @@ class VTransEFeature(nn.Module):
         return holder
 
     def forward(self, x, proposals, rel_pair_idxs, logger=None, all_average=False, ctx_average=False):
-        num_objs = [len(b) for b in proposals]
+        num_objs = [len(p["boxes"]) for p in proposals]
         # labels will be used in DecoderRNN during training (for nms)
-        if self.training or self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_BOX:
-            obj_labels = cat([proposal.get_field("labels") for proposal in proposals], dim=0)
+        if self.training or self.cfg.model.roi_relation_head.use_gt_box:
+            obj_labels = cat([proposal["labels"] for proposal in proposals], dim=0)
         else:
             obj_labels = None
 
-        if self.cfg.MODEL.ROI_RELATION_HEAD.USE_GT_OBJECT_LABEL:
+        if self.cfg.model.roi_relation_head.use_gt_object_label:
             obj_embed = self.obj_embed1(obj_labels.long())
         else:
-            obj_logits = cat([proposal.get_field("predict_logits") for proposal in proposals], dim=0).detach()
+            obj_logits = cat([proposal["predict_logits"] for proposal in proposals], dim=0).detach()
             obj_embed = F.softmax(obj_logits, dim=1) @ self.obj_embed1.weight
         
-        assert proposals[0].mode == 'xyxy'
+        assert proposals[0]["mode"] == 'xyxy'
         pos_embed = self.pos_embed(encode_box_info(proposals))
 
         batch_size = x.shape[0]

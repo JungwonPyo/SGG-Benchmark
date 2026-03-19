@@ -23,7 +23,6 @@ from torch import nn
 
 from sgg_benchmark.layers import FrozenBatchNorm2d
 from sgg_benchmark.layers import Conv2d
-from sgg_benchmark.layers import DFConv2d
 from sgg_benchmark.modeling.make_layers import group_norm
 from sgg_benchmark.utils.registry import Registry
 
@@ -86,19 +85,19 @@ class ResNet(nn.Module):
         # self.cfg = cfg.clone()
 
         # Translate string names to implementations
-        stem_module = _STEM_MODULES[cfg.MODEL.RESNETS.STEM_FUNC]
-        stage_specs = _STAGE_SPECS[cfg.MODEL.BACKBONE.TYPE]
-        transformation_module = _TRANSFORMATION_MODULES[cfg.MODEL.RESNETS.TRANS_FUNC]
+        stem_module = _STEM_MODULES[cfg.model.resnets.stem_func]
+        stage_specs = _STAGE_SPECS[cfg.model.backbone.type]
+        transformation_module = _TRANSFORMATION_MODULES[cfg.model.resnets.trans_func]
 
         # Construct the stem module
         self.stem = stem_module(cfg)
 
         # Constuct the specified ResNet stages
-        num_groups = cfg.MODEL.RESNETS.NUM_GROUPS
-        width_per_group = cfg.MODEL.RESNETS.WIDTH_PER_GROUP
-        in_channels = cfg.MODEL.RESNETS.STEM_OUT_CHANNELS
+        num_groups = cfg.model.resnets.num_groups
+        width_per_group = cfg.model.resnets.width_per_group
+        in_channels = cfg.model.resnets.stem_out_channels
         stage2_bottleneck_channels = num_groups * width_per_group
-        stage2_out_channels = cfg.MODEL.RESNETS.RES2_OUT_CHANNELS
+        stage2_out_channels = cfg.model.resnets.res2_out_channels
         self.stages = []
         self.return_features = {}
         for stage_spec in stage_specs:
@@ -106,7 +105,6 @@ class ResNet(nn.Module):
             stage2_relative_factor = 2 ** (stage_spec.index - 1)
             bottleneck_channels = stage2_bottleneck_channels * stage2_relative_factor
             out_channels = stage2_out_channels * stage2_relative_factor
-            stage_with_dcn = cfg.MODEL.RESNETS.STAGE_WITH_DCN[stage_spec.index -1]
             module = _make_stage(
                 transformation_module,
                 in_channels,
@@ -114,13 +112,8 @@ class ResNet(nn.Module):
                 out_channels,
                 stage_spec.block_count,
                 num_groups,
-                cfg.MODEL.RESNETS.STRIDE_IN_1X1,
+                cfg.model.resnets.stride_in_1x1,
                 first_stride=int(stage_spec.index > 1) + 1,
-                dcn_config={
-                    "stage_with_dcn": stage_with_dcn,
-                    "with_modulated_dcn": cfg.MODEL.RESNETS.WITH_MODULATED_DCN,
-                    "deformable_groups": cfg.MODEL.RESNETS.DEFORMABLE_GROUPS,
-                }
             )
             in_channels = out_channels
             self.add_module(name, module)
@@ -128,7 +121,7 @@ class ResNet(nn.Module):
             self.return_features[name] = stage_spec.return_features
 
         # Optionally freeze (requires_grad=False) parts of the backbone
-        self._freeze_backbone(cfg.MODEL.BACKBONE.FREEZE_CONV_BODY_AT)
+        self._freeze_backbone(cfg.model.backbone.freeze_conv_body_at)
 
     def _freeze_backbone(self, freeze_at):
         if freeze_at < 0:
@@ -282,33 +275,18 @@ class Bottleneck(nn.Module):
         )
         self.bn1 = norm_func(bottleneck_channels)
         # TODO: specify init for the above
-        with_dcn = dcn_config.get("stage_with_dcn", False)
-        if with_dcn:
-            deformable_groups = dcn_config.get("deformable_groups", 1)
-            with_modulated_dcn = dcn_config.get("with_modulated_dcn", False)
-            self.conv2 = DFConv2d(
-                bottleneck_channels,
-                bottleneck_channels,
-                with_modulated_dcn=with_modulated_dcn,
-                kernel_size=3,
-                stride=stride_3x3,
-                groups=num_groups,
-                dilation=dilation,
-                deformable_groups=deformable_groups,
-                bias=False
-            )
-        else:
-            self.conv2 = Conv2d(
-                bottleneck_channels,
-                bottleneck_channels,
-                kernel_size=3,
-                stride=stride_3x3,
-                padding=dilation,
-                bias=False,
-                groups=num_groups,
-                dilation=dilation
-            )
-            nn.init.kaiming_uniform_(self.conv2.weight, a=1)
+        # DCN (Deformable Convolution) has been removed. Using standard Conv2d.
+        self.conv2 = Conv2d(
+            bottleneck_channels,
+            bottleneck_channels,
+            kernel_size=3,
+            stride=stride_3x3,
+            padding=dilation,
+            bias=False,
+            groups=num_groups,
+            dilation=dilation
+        )
+        nn.init.kaiming_uniform_(self.conv2.weight, a=1)
 
         self.bn2 = norm_func(bottleneck_channels)
 
@@ -347,7 +325,7 @@ class BaseStem(nn.Module):
     def __init__(self, cfg, norm_func):
         super(BaseStem, self).__init__()
 
-        out_channels = cfg.MODEL.RESNETS.STEM_OUT_CHANNELS
+        out_channels = cfg.model.resnets.stem_out_channels
 
         self.conv1 = Conv2d(
             3, out_channels, kernel_size=7, stride=2, padding=3, bias=False

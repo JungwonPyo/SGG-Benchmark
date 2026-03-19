@@ -1,0 +1,327 @@
+# Default SGG-Benchmark Configuration (Hydra + OmegaConf format)
+# This is the base configuration file that mirrors defaults.py but in modern YAML format
+
+# Random seed
+seed: 42
+metric_to_track: "mR"
+dtype: "float32"  # Options: float32, float16, bfloat16
+
+# Output directories
+output_dir: "."
+glove_dir: "."
+verbose: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+paths_catalog: "${hydra:runtime.cwd}/sgg_benchmark/config/paths_catalog.py"
+paths_data: "/home/Documents/Datasets/VG/"
+
+# Global settings (for GCL and other advanced features)
+global_setting:
+  # Basic encoder selection for relation predictor
+  basic_encoder: "Self-Attention"  # Options: Self-Attention, Cross-Attention, Hybrid-Attention, Motifs, VTransE
+  
+  # Use frequency bias (relation statistics as prior knowledge)
+  use_bias: false
+  beta_loss: false  # Use beta distribution for class reweighting
+  
+  # Dataset choice (for GCL group splits)
+  dataset_choice: "VG"  # Options: VG, GQA_200
+  
+  # GCL (Group Collaborative Learning) settings
+  gcl_setting:
+    group_split_mode: "divide4"  # Options: divide3, divide4, divide5, average
+    knowledge_transfer_mode: "None"  # Options: None, KL_logit_Neighbor, KL_logit_None, KL_logit_TopDown, KL_logit_BottomUp, KL_logit_BiDirection
+    knowledge_loss_coefficient: 1.0  # Weight for knowledge transfer loss
+    no_relation_restrain: false  # Limit contribution of non-relation pairs to loss
+    zero_label_padding_mode: "rand_insert"  # Options: rand_insert, rand_choose, all_include
+    no_relation_penalty: 0.1  # Penalty weight for non-relation pairs
+
+# Input preprocessing
+input:
+  img_size: [640, 640]  # [W, H]
+  pixel_mean: [102.9801, 115.9465, 122.7717]
+  pixel_std: [1.0, 1.0, 1.0]
+  to_bgr255: true
+  flip_prob_train: 0.5
+  padding: false
+  brightness: 0.0
+  contrast: 0.0
+  saturation: 0.0
+  hue: 0.0
+  vertical_flip_prob_train: 0.0
+
+# Dataset configuration
+# -----------------------------------------------------------------------
+# Only three fields are required:
+#   name:     PSG | VG150 | IndoorVG
+#   type:     coco | h5
+#   data_dir: path to the dataset root (empty = use built-in default)
+#
+# If type=coco and data_dir/<split>/_annotations.coco.json does not exist,
+# the dataset is downloaded automatically from HuggingFace Hub.
+# Manual download:  python tools/download_from_hub.py --dataset <name>
+# -----------------------------------------------------------------------
+datasets:
+  name: ""       # PSG | VG150 | IndoorVG
+  type: "coco"   # coco | h5
+  data_dir: ""   # empty → use built-in default for (name, type)
+
+  # Derived lists used by tools for evaluation labelling.
+  # They resolve automatically from datasets.name via OmegaConf interpolation.
+  train: ["${datasets.name}_train"]
+  val:   ["${datasets.name}_val"]
+  test:  ["${datasets.name}_test"]
+
+# DataLoader configuration
+dataloader:
+  num_workers: 4
+  size_divisibility: 0
+  aspect_ratio_grouping: true
+
+# Model architecture
+model:
+  flip_aug: false
+  rpn_only: false
+  mask_on: false
+  attribute_on: false
+  relation_on: false
+  device: "cuda"
+  meta_architecture: "GeneralizedRCNN"  # or GeneralizedYOLO
+  cls_agnostic_bbox_reg: false
+  weight: ""
+  pretrained_detector_ckpt: ""
+  text_embedding: "glove.6B"  # Options: clip, glove.6B
+  box_head: true
+  
+  # Backbone configuration
+  backbone:
+    type: "R-50-C4"  # R-50-C4, R-50-C5, R-101-C4, R-101-C5, R-50-FPN, R-101-FPN, yolo
+    extra_config: ""
+    freeze_conv_body_at: 2
+    nms_thresh: 0.7
+    freeze: false
+  
+  # FPN configuration
+  fpn:
+    use_gn: false
+    use_relu: false
+  
+  # Group Normalization
+  group_norm:
+    dim_per_gp: -1
+    num_groups: 32
+    epsilon: 1e-5
+  
+  # YOLO configuration
+  yolo:
+    weights: ""
+    size: "yolov8l"  # nano, small, medium, large
+    out_channels: [192, 384, 576]  # [192,384,576] for yolov8, [256,512,512] for yolo11/12
+  
+  # RPN configuration
+  rpn:
+    use_fpn: false
+    rpn_mid_channel: 512
+    anchor_sizes: [32, 64, 128, 256, 512]
+    anchor_stride: [16]
+    aspect_ratios: [0.5, 1.0, 2.0]
+    straddle_thresh: 0
+    fg_iou_threshold: 0.7
+    bg_iou_threshold: 0.3
+    batch_size_per_image: 256
+    positive_fraction: 0.5
+    pre_nms_top_n_train: 12000
+    pre_nms_top_n_test: 6000
+    post_nms_top_n_train: 2000
+    post_nms_top_n_test: 1000
+    min_size: 0
+    fpn_post_nms_top_n_train: 2000
+    fpn_post_nms_top_n_test: 2000
+    fpn_post_nms_per_batch: true
+    rpn_head: "SingleConvRPNHead"
+  
+  # ROI Heads
+  roi_heads:
+    fg_iou_threshold: 0.5
+    bg_iou_threshold: 0.3
+    bbox_reg_weights: [10.0, 10.0, 5.0, 5.0]
+    batch_size_per_image: 256
+    positive_fraction: 0.25
+    score_thresh: 0.01
+    nms: 0.3
+    post_nms_per_cls_topn: 300
+    nms_filter_duplicates: false
+    detections_per_img: 100
+  
+  # ROI Box Head
+  roi_box_head:
+    feature_extractor: "ResNet50Conv5ROIFeatureExtractor"
+    predictor: "FastRCNNPredictor"
+    pooler_resolution: 14
+    pooler_sampling_ratio: 0
+    pooler_scales: [0.0625]
+    mlp_head_dim: 2048
+    use_gn: false
+    dilation: 1
+    conv_head_dim: 256
+    num_stacked_convs: 4
+  
+  # ROI Attribute Head
+  roi_attribute_head:
+    feature_extractor: "FPN2MLPFeatureExtractor"
+    predictor: "FPNPredictor"
+    share_box_feature_extractor: true
+    use_binary_loss: true
+    attribute_loss_weight: 0.1
+    num_attributes: 201
+    max_attributes: 10
+    attribute_bgfg_sample: true
+    attribute_bgfg_ratio: 3
+    pos_weight: 5.0
+  
+  # ROI Relation Head
+  roi_relation_head:
+    predictor: "MotifPredictor"
+    feature_extractor: "RelationFeatureExtractor"
+    use_union_features: true
+    use_spatial_features: true
+    textual_features_only: false
+    visual_features_only: false
+    logit_adjustment: false
+    logit_adjustment_tau: 0.3
+    pooling_all_levels: true
+    batch_size_per_image: 64
+    positive_fraction: 0.25
+    use_gt_box: true
+    use_gt_object_label: false
+    embed_dim: 200
+    context_dropout_rate: 0.2
+    context_hidden_dim: 512
+    context_pooling_dim: 4096
+    context_obj_layer: 1
+    context_rel_layer: 1
+    mlp_head_dim: 2048
+    loss: "CrossEntropyLoss"  # CrossEntropyLoss, FocalLoss, ReweightingCE
+    
+    # Predicate Decoder specific (new feature)
+    
+    # Transformer configuration
+    transformer:
+      dropout_rate: 0.1
+      obj_layer: 4
+      rel_layer: 2
+      num_head: 8
+      inner_dim: 2048
+      key_dim: 64
+      val_dim: 64
+    
+    # SQUAT module
+    squat_module:
+      pre_norm: false
+      num_decoder: 3
+      rho: 0.35
+      beta: 0.7
+      pretrain_mask: false
+      pretrain_mask_epoch: 1
+    
+    # Causal analysis
+    causal:
+      effect_analysis: false
+      fusion_type: 'sum'
+      context_layer: 'motifs'
+      separate_spatial: false
+      effect_type: 'none'
+      spatial_for_vision: false
+    
+    # Additional settings
+    label_smoothing_loss: false
+    use_frequency_bias: false
+    require_box_overlap: true
+    num_sample_per_gt_rel: 4
+    add_gtbox_to_proposal_in_train: false
+    classifier: "linear"  # weighted_norm, linear, cosine_similarity
+    predict_use_vision: false
+  
+  # ResNets configuration
+  resnets:
+    num_groups: 1
+    width_per_group: 64
+    stride_in_1x1: true
+    trans_func: "BottleneckWithFixedBatchNorm"
+    stem_func: "StemWithFixedBatchNorm"
+    res5_dilation: 1
+    backbone_out_channels: 1024
+    res2_out_channels: 256
+    stem_out_channels: 64
+    stage_with_dcn: [false, false, false, false]
+    with_modulated_dcn: false
+    deformable_groups: 1
+
+# Solver/Optimizer configuration
+solver:
+  max_iter: 40000
+  max_epoch: 100
+  base_lr: 0.001
+  bias_lr_factor: 1
+  momentum: 0.9
+  weight_decay: 0.0005
+  weight_decay_bias: 0.0
+  clip_norm: 5.0
+  gamma: 0.5
+  steps: [30000]
+  warmup_factor: 0.333333
+  warmup_epochs: 500
+  warmup_method: "linear"
+  checkpoint_period: 2500
+  grad_norm_clip: 5.0
+  print_grad_freq: 5000
+  to_val: true
+  pre_val: true
+  val_period: 2500
+  update_schedule_during_load: false
+  ims_per_batch: 8
+  optimizer: "SGD"  # SGD, ADAMW
+  
+  # Learning rate schedule
+  schedule:
+    type: "WarmupMultiStepLR"  # WarmupMultiStepLR, WarmupReduceLROnPlateau
+    patience: 2
+    threshold: 0.0001
+    cooldown: 1
+    factor: 0.5
+    max_decay_step: 7
+
+# Test configuration
+test:
+  expected_results: []
+  expected_results_sigma_tol: 4
+  ims_per_batch: 8
+  detections_per_img: 100
+  informative: false
+  
+  # Bounding box augmentation
+  bbox_aug:
+    enabled: false
+    h_flip: false
+    scales: []
+    max_size: 4000
+    scale_h_flip: false
+  
+  save_proposals: false
+  
+  # Relation testing
+  relation:
+    multiple_preds: false
+    iou_threshold: 0.5
+    require_overlap: true
+    later_nms_prediction_thres: 0.3
+    sync_gather: false
+  
+  allow_load_from_cache: true
+  top_k: 100
+
+# Hydra-specific settings (optional)
+hydra:
+  run:
+    dir: ${output_dir}/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: ${output_dir}/hydra/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}

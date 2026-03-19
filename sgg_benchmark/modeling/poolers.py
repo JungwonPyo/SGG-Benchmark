@@ -5,6 +5,7 @@ from torch import nn
 
 from sgg_benchmark.layers import ROIAlign
 from sgg_benchmark.modeling.make_layers import make_conv3x3
+from sgg_benchmark.structures.box_ops import box_area
 
 from .utils import cat
 
@@ -29,13 +30,16 @@ class LevelMapper(object):
         self.lvl0 = canonical_level
         self.eps = eps
 
-    def __call__(self, boxlists):
+    def __call__(self, boxes):
         """
         Arguments:
-            boxlists (list[BoxList])
+            boxes (list[Dict])
         """
         # Compute level ids
-        s = torch.sqrt(cat([boxlist.area() for boxlist in boxlists]))
+        # Use lb_boxes (letterbox space) when available — the pooler scales are
+        # calibrated for lb coords (e.g. 0.125 = 80/640 for P3), so level
+        # assignment must be done in the same space.
+        s = torch.sqrt(cat([box_area(b.get("lb_boxes", b["boxes"]), "xyxy") for b in boxes]))
 
         # Eqn.(1) in FPN paper
         target_lvls = torch.floor(self.lvl0 + torch.log2(s / self.s0 + self.eps))
@@ -82,14 +86,17 @@ class Pooler(nn.Module):
         self.map_levels = LevelMapper(lvl_min, lvl_max)
         # reduce the channels
         if self.cat_all_levels:
-            self.reduce_channel = make_conv3x3(in_channels * len(self.poolers), in_channels, dilation=1, stride=1, use_relu=True)
+            self.reduce_channel = make_conv3x3(in_channels=in_channels * len(self.poolers), out_channels=in_channels, dilation=1, stride=1, use_relu=True)
 
     def convert_to_roi_format(self, boxes):
-        concat_boxes = cat([b.bbox for b in boxes], dim=0)
+        # Use lb_boxes (letterbox pixel coords, [0, lb_input_size]) when present.
+        # YOLO P3/P4/P5 feature maps are always computed on the letterboxed input,
+        # so RoI coordinates must be in that same space for correct alignment.
+        concat_boxes = cat([b.get("lb_boxes", b["boxes"]) for b in boxes], dim=0)
         device, dtype = concat_boxes.device, concat_boxes.dtype
         ids = cat(
             [
-                torch.full((len(b), 1), i, dtype=dtype, device=device)
+                torch.full((len(b.get("lb_boxes", b["boxes"])), 1), i, dtype=dtype, device=device)
                 for i, b in enumerate(boxes)
             ],
             dim=0,
@@ -146,8 +153,7 @@ class PoolerYOLO(nn.Module):
         self.out_channels = out_channels
         self.num_features = 3                   # features map depth, for YOLOV8m is 3, with size 20x20x256, 40x40x512, 80x80x512
 
-        self.reduce_channel = make_conv3x3(self.out_channels * self.num_features, self.out_channels, dilation=1, stride=1, use_relu=True)
-
+        self.reduce_channel = make_conv3x3(in_channels=self.out_channels * self.num_features, out_channels=self.out_channels, dilation=1, stride=1, use_relu=True)
 
     def forward(self, x, boxes, reduce=False):
         dtype, device = x[0].dtype, x[0].device
@@ -163,9 +169,12 @@ class PoolerYOLO(nn.Module):
         rois = self.convert_to_roi_format(boxes)
         # assert rois.size(0) > 0
 
-        # Infer scales from the actual image
-        scales = [boxes[0].size[0] / feature_map.size(-1) for feature_map in x]
-        print(scales)
+        # Infer spatial scales: feature_map_size / lb_input_size.
+        # lb_input_size is the size of the letterboxed image (e.g. 640) that was
+        # fed to YOLO. All feature maps are in that coordinate space, and lb_boxes
+        # are also in [0, lb_input_size] pixel coords, so spatial_scale = fm_H / lb_sz.
+        lb_input_size = float(boxes[0].get("lb_input_size", 640))
+        scales = [feature_map.size(-1) / lb_input_size for feature_map in x]
         poolers = [ROIAlign(self.output_size, spatial_scale=scale, sampling_ratio=self.sampling_ratio) for scale in scales]
 
         if num_levels == 1:
@@ -199,11 +208,13 @@ class PoolerYOLO(nn.Module):
         return result
     
     def convert_to_roi_format(self, boxes):
-        concat_boxes = cat([b.bbox for b in boxes], dim=0)
+        # Use lb_boxes (letterbox pixel coords) when present — feature maps live
+        # in that coordinate space, not original-image space.
+        concat_boxes = cat([b.get("lb_boxes", b["boxes"]) for b in boxes], dim=0)
         device, dtype = concat_boxes.device, concat_boxes.dtype
         ids = cat(
             [
-                torch.full((len(b), 1), i, dtype=dtype, device=device)
+                torch.full((len(b.get("lb_boxes", b["boxes"])), 1), i, dtype=dtype, device=device)
                 for i, b in enumerate(boxes)
             ],
             dim=0,
@@ -219,16 +230,19 @@ class LevelMapperYOLO(object):
     def __init__(self, map_size=[20,40,80]):
         self.map_scales = map_size
 
-    def __call__(self, boxlists):
+    def __call__(self, boxes):
         """
         Assign each ROI to a feature map based on its area, to follow the YOLOV8 architecture with 3 different scales.
         Args:
-            boxlists (list[BoxList])
+            boxes (list[Dict])
         Returns:
             target_lvls (Tensor[N]): A tensor of the same length as rois, where each element is the target level of the corresponding ROI.
         """
-        # Calculate the area of each ROI
-        areas = torch.cat([boxlist.area() for boxlist in boxlists])
+        # Calculate the area of each ROI.
+        # Use lb_boxes (letterbox space) when available — the threshold values
+        # (map_scales[1]²=1600, map_scales[2]²=6400) are in letterbox-pixel² units,
+        # so comparisons must be made in the same coordinate space.
+        areas = torch.cat([box_area(b.get("lb_boxes", b["boxes"]), "xyxy") for b in boxes])
 
         # Assign each ROI to a feature map
         target_lvls = torch.zeros_like(areas)
@@ -240,9 +254,9 @@ class LevelMapperYOLO(object):
         return target_lvls
 
 def make_pooler(cfg, head_name):
-    resolution = cfg.MODEL[head_name].POOLER_RESOLUTION
-    scales = cfg.MODEL[head_name].POOLER_SCALES
-    sampling_ratio = cfg.MODEL[head_name].POOLER_SAMPLING_RATIO
+    resolution = cfg.model[head_name].pooler_resolution
+    scales = cfg.model[head_name].pooler_scales
+    sampling_ratio = cfg.model[head_name].pooler_sampling_ratio
     pooler = Pooler(
         output_size=(resolution, resolution),
         scales=scales,

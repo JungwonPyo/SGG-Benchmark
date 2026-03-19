@@ -13,7 +13,7 @@ def get_box_info(boxes, need_norm=True, proposal=None):
     center_box = torch.cat((boxes[:, :2] + 0.5 * wh, wh), 1)
     box_info = torch.cat((boxes, center_box), 1)
     if need_norm:
-        box_info = box_info / float(max(max(proposal.size[0], proposal.size[1]), 100))
+        box_info = box_info / float(max(max(proposal["image_size"][0], proposal["image_size"][1]), 100))
     return box_info
 
 def get_box_pair_info(box1, box2):

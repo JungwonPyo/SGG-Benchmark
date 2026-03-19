@@ -2,20 +2,20 @@
 from . import transforms as T
 
 def build_transforms(cfg, is_train=True):
-    padding = cfg.INPUT.PADDING
+    padding = cfg.input.padding
 
     if is_train:
-        min_size = cfg.INPUT.MIN_SIZE_TRAIN
-        max_size = cfg.INPUT.MAX_SIZE_TRAIN
-        flip_horizontal_prob = cfg.INPUT.FLIP_PROB_TRAIN
-        flip_vertical_prob = cfg.INPUT.VERTICAL_FLIP_PROB_TRAIN
-        brightness = cfg.INPUT.BRIGHTNESS
-        contrast = cfg.INPUT.CONTRAST
-        saturation = cfg.INPUT.SATURATION
-        hue = cfg.INPUT.HUE
+        min_size = cfg.input.img_size[1]  # H
+        max_size = cfg.input.img_size[0]  # W
+        flip_horizontal_prob = cfg.input.flip_prob_train
+        flip_vertical_prob = cfg.input.vertical_flip_prob_train
+        brightness = cfg.input.brightness
+        contrast = cfg.input.contrast
+        saturation = cfg.input.saturation
+        hue = cfg.input.hue
     else:
-        min_size = cfg.INPUT.MIN_SIZE_TEST
-        max_size = cfg.INPUT.MAX_SIZE_TEST
+        min_size = cfg.input.img_size[1]  # H
+        max_size = cfg.input.img_size[0]  # W
         flip_horizontal_prob = 0.0
         flip_vertical_prob = 0.0
         brightness = 0.0
@@ -23,9 +23,9 @@ def build_transforms(cfg, is_train=True):
         saturation = 0.0
         hue = 0.0
 
-    to_bgr255 = cfg.INPUT.TO_BGR255
+    to_bgr255 = cfg.input.to_bgr255
     normalize_transform = T.Normalize(
-        mean=cfg.INPUT.PIXEL_MEAN, std=cfg.INPUT.PIXEL_STD, to_bgr255=to_bgr255
+        mean=cfg.input.pixel_mean, std=cfg.input.pixel_std, to_bgr255=to_bgr255
     )
     color_jitter = T.ColorJitter(
         brightness=brightness,
