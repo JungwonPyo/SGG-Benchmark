@@ -1,0 +1,42 @@
+# reactpp/configs/robot_react.yaml
+MODEL:
+  META_ARCHITECTURE: "REACTGeneralizedRCNN"
+  PRETRAINED_DETECTOR_CKPT: "weights/yolo_robot.pt"
+  FREEZE_DETECTOR: True
+
+  ROI_HEADS:
+    NUM_CLASSES: 10  # 당신 10종 물체
+
+  ROI_RELATION_HEAD:
+    USE_GT_BOX:        False
+    USE_GT_OBJECT_LABEL: False
+    PREDICTOR:         "REACTPlusPlusPredictor"
+    NUM_CLASSES:       10
+    RELATION_CLASS_NAMES:
+      - "on"
+      - "inside"
+      - "next_to"
+      - "above"
+      - "touching"
+      - "blocking"
+      - "near"
+      - "beside"
+
+DATASETS:
+  TRAIN: "robot_train"
+  TEST:  "robot_test"
+  DATA_H5:   "data/h5/dataset.h5"
+  IMG_DIR:   "data/raw_images"
+  NUM_OBJ_CLASSES: 10
+  NUM_REL_CLASSES: 8
+
+SOLVER:
+  MAX_EPOCH:    20
+  BASE_LR:      0.001
+  STEPS:        [10, 16]
+  WARMUP_ITERS: 100
+
+TEST:
+  RELATION_MODE: "predcls"   # predcls → sgcls → sgdet 순으로 전환
+
+OUTPUT_DIR: "output/robot_react_exp"

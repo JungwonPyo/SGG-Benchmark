@@ -1,0 +1,24 @@
+{
+  "description": "Scene Graph Dataset Schema",
+  "scene_id": "str (ex: S2_blocked_001)",
+  "situation": "S1|S2|S3|S4|S5",
+  "image_path": "str",
+  "objects": [
+    {
+      "id": "str (O1~O10)",
+      "class": "one_of [부품 박스, 플라스틱 트레이, 공정 부품, 드라이버, 작업자 손, 조립 지그, 폐기 박스, 렌치, 케이블 묶음, 보호 고글]",
+      "bbox": "[x1, y1, x2, y2] int pixels",
+      "confidence": "float 0~1"
+    }
+  ],
+  "relationships": [
+    {
+      "subject": "obj_id",
+      "predicate": "one_of [on, inside, next_to, above, touching, blocking, near, beside]",
+      "object": "obj_id"
+    }
+  ],
+  "path_modification": "stop|detour|wait|retarget|normal",
+  "goal_position": "[x, y]",
+  "goal_changed": false
+}
