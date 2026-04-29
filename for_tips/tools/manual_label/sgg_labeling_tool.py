@@ -385,7 +385,58 @@ class SceneGraphLabeler(QMainWindow):
             painter.drawRect(b[0], b[1]-15, 40, 15)
             painter.drawText(b[0]+2, b[1]-3, inst["id"])
 
-        # 3. Draw Current Active SAM Mask
+        # 3. Draw Relations (Arrows & Text)
+        id_to_bbox = {inst["id"]: inst["bbox"] for inst in self.instances}
+        painter.setRenderHint(QPainter.Antialiasing)
+        import math
+        for rel in self.relations:
+            sub_id = rel["subject"]
+            obj_id = rel["object"]
+            pred = rel["predicate"]
+
+            if sub_id in id_to_bbox and obj_id in id_to_bbox:
+                b1 = id_to_bbox[sub_id]
+                b2 = id_to_bbox[obj_id]
+
+                # Centers of the two bounding boxes
+                p1 = QPointF((b1[0] + b1[2]) / 2, (b1[1] + b1[3]) / 2)
+                p2 = QPointF((b2[0] + b2[2]) / 2, (b2[1] + b2[3]) / 2)
+
+                # Draw Dashed Line connecting the two centers
+                painter.setPen(QPen(Qt.yellow, 2, Qt.DashLine))
+                painter.drawLine(p1, p2)
+
+                # Draw Arrowhead pointing to the object
+                angle = math.atan2(p2.y() - p1.y(), p2.x() - p1.x())
+                arrow_size = 15
+                p3 = QPointF(p2.x() - arrow_size * math.cos(angle - math.pi / 6),
+                             p2.y() - arrow_size * math.sin(angle - math.pi / 6))
+                p4 = QPointF(p2.x() - arrow_size * math.cos(angle + math.pi / 6),
+                             p2.y() - arrow_size * math.sin(angle + math.pi / 6))
+
+                painter.setBrush(Qt.yellow)
+                painter.setPen(Qt.NoPen)
+                painter.drawPolygon(QPolygonF([p2, p3, p4]))
+
+                # Draw Predicate Text at the midpoint
+                mid_p = QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
+                fm = painter.fontMetrics()
+                text_rect = fm.boundingRect(pred)
+
+                # Center the rectangle on the midpoint and add padding
+                text_rect.translate(int(mid_p.x() - text_rect.width()/2), int(mid_p.y() - text_rect.height()/2))
+                text_rect.adjust(-6, -4, 6, 4) 
+
+                # Draw semi-transparent background for text readability
+                painter.setBrush(QColor(0, 0, 0, 180)) 
+                painter.setPen(Qt.NoPen)
+                painter.drawRect(text_rect)
+
+                # Draw the actual relationship text
+                painter.setPen(Qt.yellow)
+                painter.drawText(text_rect, Qt.AlignCenter, pred)
+
+        # 4. Draw Current Active SAM Mask
         if self.current_sam_mask is not None:
             mask = self.current_sam_mask
             mask_img = Image.fromarray((mask * 128).astype(np.uint8), mode='L')
@@ -394,7 +445,7 @@ class SceneGraphLabeler(QMainWindow):
             q_mask = self.pil_to_qimage(mask_rgba)
             painter.drawImage(0, 0, q_mask)
 
-        # 4. Draw SAM Prompts
+        # 5. Draw SAM Prompts
         for pt, lbl in zip(self.input_points, self.input_labels):
             color = Qt.green if lbl == 1 else Qt.red
             painter.setPen(Qt.NoPen)
@@ -488,7 +539,6 @@ class SceneGraphLabeler(QMainWindow):
         base_dir = os.path.dirname(img_path)
         jsonl_path = os.path.join(os.path.dirname(base_dir), "dataset", "manual_labeled.jsonl")
         mask_path = os.path.join(os.path.dirname(base_dir), "masks", f"{os.path.splitext(os.path.basename(img_path))[0]}_mask.png")
-        print(jsonl_path)
 
         if not os.path.exists(jsonl_path): return
 
