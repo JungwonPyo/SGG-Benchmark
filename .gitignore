@@ -62,3 +62,5 @@ output/
 *.pth
 
 .venv
+
+for_tips/data/segment_1

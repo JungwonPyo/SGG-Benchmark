@@ -95,11 +95,19 @@ class GeneralizedYOLO(nn.Module):
         
         if can_train_backbone:
             # Full forward pass with gradients enabled for backbone
-            outputs, features = self.backbone(images.tensors, visualize=False, embed=True)
+            # outputs, features = self.backbone(images.tensors, visualize=False, embed=True)
+            if hasattr(self.backbone, "forward_sgg"):
+                outputs, features = self.backbone.forward_sgg(images.tensors, visualize=False, embed=True)
+            else:
+                outputs, features = self.backbone(images.tensors, visualize=False, embed=True)
         else:
             # Inference mode or frozen backbone: no gradients for backbone
             with torch.no_grad():
-                outputs, features = self.backbone(images.tensors, visualize=False, embed=True)
+                # outputs, features = self.backbone(images.tensors, visualize=False, embed=True)
+                if hasattr(self.backbone, "forward_sgg"):
+                    outputs, features = self.backbone.forward_sgg(images.tensors, visualize=False, embed=True)
+                else:
+                    outputs, features = self.backbone(images.tensors, visualize=False, embed=True)
 
         # Post-processing (NMS, box decoding) should always be non-differentiable
         with torch.no_grad():

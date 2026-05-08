@@ -183,41 +183,90 @@ class BalancedLogitAdjustedLoss(nn.Module):
         # outliers (mislabeled pairs, numerical edge cases, very hard early-training steps).
         self.max_ce_clip = 1.5 * math.log(max(2, int(len(pred_freq))))
 
+    # def get_empirical_soft_target(self, s_idx, o_idx, num_classes, device):
+    #     """
+    #     Build a soft target distribution from the empirical P(FG_rel | S, O) stored
+    #     in fg_matrix.  The hard BG one-hot is mixed with the dataset prior using a
+    #     confidence-weighted λ_eff so that low-evidence pairs stay close to the hard label.
+
+    #     Returns:
+    #         soft_target  [N, num_classes]  soft label for each BG pair
+    #         has_evidence [N] bool          True where the pair appeared in fg_matrix
+    #     """
+    #     counts = self.fg_matrix[s_idx, o_idx]           # [N, num_rel]
+    #     pair_total = counts.sum(dim=-1)                  # [N]
+    #     has_evidence = pair_total > 0
+
+    #     # FG-only empirical distribution: zero out the BG slot and renormalise
+    #     # so that the injected mass is purely about *which FG predicate* is likely.
+    #     p_fg = counts.clone()
+    #     p_fg[:, 0] = 0.0
+    #     fg_sum = p_fg.sum(dim=-1, keepdim=True).clamp(min=1e-6)
+    #     p_fg = p_fg / fg_sum                             # [N, num_rel], sums to 1
+
+    #     # Confidence: Bayesian-style trust calibrated on annotation volume.
+    #     # prior=10 → 50% trust at 10 annotations, ~90% trust at 90 annotations.
+    #     prior = 10.0
+    #     confidence = pair_total / (pair_total + prior)   # [N], in [0, 1)
+
+    #     # Effective mixing weight: scales with both bg_discount and evidence strength
+    #     eff_lambda = self.bg_discount * confidence       # [N]
+
+    #     # Soft target: interpolate between hard BG and empirical FG distribution
+    #     soft_target = torch.zeros(s_idx.shape[0], num_classes, device=device, dtype=torch.float32)
+    #     soft_target[:, 0] = 1.0 - eff_lambda            # BG mass
+    #     soft_target += eff_lambda.unsqueeze(1) * p_fg   # FG mass
+
+    #     return soft_target, has_evidence
+    
     def get_empirical_soft_target(self, s_idx, o_idx, num_classes, device):
         """
-        Build a soft target distribution from the empirical P(FG_rel | S, O) stored
-        in fg_matrix.  The hard BG one-hot is mixed with the dataset prior using a
-        confidence-weighted λ_eff so that low-evidence pairs stay close to the hard label.
-
-        Returns:
-            soft_target  [N, num_classes]  soft label for each BG pair
-            has_evidence [N] bool          True where the pair appeared in fg_matrix
+        Supports both:
+        1) fg_matrix last dim == num_classes      : bg+fg
+        2) fg_matrix last dim == num_classes - 1  : fg-only
+        Background is always assumed to be class 0 in logits/targets.
         """
-        counts = self.fg_matrix[s_idx, o_idx]           # [N, num_rel]
-        pair_total = counts.sum(dim=-1)                  # [N]
-        has_evidence = pair_total > 0
+        counts = self.fg_matrix[s_idx, o_idx].float()   # [N, Cfg] or [N, C]
+        n_emp = counts.shape[1]
 
-        # FG-only empirical distribution: zero out the BG slot and renormalise
-        # so that the injected mass is purely about *which FG predicate* is likely.
-        p_fg = counts.clone()
-        p_fg[:, 0] = 0.0
-        fg_sum = p_fg.sum(dim=-1, keepdim=True).clamp(min=1e-6)
-        p_fg = p_fg / fg_sum                             # [N, num_rel], sums to 1
+        if n_emp == num_classes:
+            # fg_matrix already includes BG at index 0
+            fg_counts = counts.clone()
+            fg_counts[:, 0] = 0.0
+            fg_probs = fg_counts / fg_counts.sum(dim=-1, keepdim=True).clamp(min=1e-6)
+            pair_total = fg_counts.sum(dim=-1)
+            has_evidence = pair_total > 0
 
-        # Confidence: Bayesian-style trust calibrated on annotation volume.
-        # prior=10 → 50% trust at 10 annotations, ~90% trust at 90 annotations.
-        prior = 10.0
-        confidence = pair_total / (pair_total + prior)   # [N], in [0, 1)
+            prior = 10.0
+            confidence = pair_total / (pair_total + prior)
+            eff_lambda = self.bg_discount * confidence
 
-        # Effective mixing weight: scales with both bg_discount and evidence strength
-        eff_lambda = self.bg_discount * confidence       # [N]
+            soft_target = torch.zeros(s_idx.shape[0], num_classes, device=device, dtype=torch.float32)
+            soft_target[:, 0] = 1.0 - eff_lambda
+            soft_target[:, 1:] = eff_lambda.unsqueeze(1) * fg_probs[:, 1:]
+            return soft_target, has_evidence
 
-        # Soft target: interpolate between hard BG and empirical FG distribution
-        soft_target = torch.zeros(s_idx.shape[0], num_classes, device=device, dtype=torch.float32)
-        soft_target[:, 0] = 1.0 - eff_lambda            # BG mass
-        soft_target += eff_lambda.unsqueeze(1) * p_fg   # FG mass
+        elif n_emp == num_classes - 1:
+            # fg_matrix is foreground-only, logits include BG at class 0
+            fg_counts = counts
+            pair_total = fg_counts.sum(dim=-1)
+            has_evidence = pair_total > 0
 
-        return soft_target, has_evidence
+            fg_probs = fg_counts / fg_counts.sum(dim=-1, keepdim=True).clamp(min=1e-6)
+
+            prior = 10.0
+            confidence = pair_total / (pair_total + prior)
+            eff_lambda = self.bg_discount * confidence
+
+            soft_target = torch.zeros(s_idx.shape[0], num_classes, device=device, dtype=torch.float32)
+            soft_target[:, 0] = 1.0 - eff_lambda
+            soft_target[:, 1:] = eff_lambda.unsqueeze(1) * fg_probs
+            return soft_target, has_evidence
+
+        else:
+            raise ValueError(
+                f"fg_matrix/logit mismatch: fg_matrix last dim={n_emp}, num_classes={num_classes}"
+            )
 
     def forward(self, logits, target, sbj_labels=None, obj_labels=None):
         device = logits.device
@@ -230,8 +279,30 @@ class BalancedLogitAdjustedLoss(nn.Module):
         priors = self.priors.to(device=device, dtype=torch.float32)
         
         # --- 1. Logit Adjustment (active when tau > 0) ---
+        # log_priors = torch.log(priors + 1e-12).clamp(min=-20.0, max=20.0)
+        # if log_priors.numel() != logits.size(1):
+        #     if log_priors.numel() + 1 == logits.size(1):
+        #         bg = torch.zeros(1, device=log_priors.device, dtype=log_priors.dtype)
+        #         log_priors = torch.cat([bg, log_priors], dim=0)
+        #     else:
+        #         raise ValueError(
+        #             f"log_priors/logits mismatch: "
+        #             f"log_priors={log_priors.shape}, logits={logits.shape}"
+        #         )
+        # adjusted_logits = logits + self.tau * log_priors.unsqueeze(0)
+        # adjusted_logits = torch.clamp(adjusted_logits, min=-50.0, max=50.0)
         log_priors = torch.log(priors + 1e-12).clamp(min=-20.0, max=20.0)
-        adjusted_logits = logits + self.tau * log_priors.unsqueeze(0)
+
+        if log_priors.numel() == logits.size(1):
+            adjusted_logits = logits + self.tau * log_priors.unsqueeze(0)
+        elif log_priors.numel() == logits.size(1) - 1:
+            adjusted_logits = logits.clone()
+            adjusted_logits[:, 1:] = adjusted_logits[:, 1:] + self.tau * log_priors.unsqueeze(0)
+        else:
+            raise ValueError(
+                f"log_priors/logits mismatch: log_priors={log_priors.shape}, logits={logits.shape}"
+            )
+
         adjusted_logits = torch.clamp(adjusted_logits, min=-50.0, max=50.0)
 
         # --- 2. Base Cross Entropy ---

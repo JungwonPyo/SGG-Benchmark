@@ -9,7 +9,12 @@ import seaborn as sns
 from sgg_benchmark.config import load_config_from_file
 from sgg_benchmark.data.build import build_transforms
 from sgg_benchmark.data import get_dataset_statistics
-from .demo_model import SGG_Model
+# from .demo_model import SGG_Model
+
+try:
+    from .demo_model import SGG_Model
+except ImportError:
+    from demo_model import SGG_Model
 
 class SGG_ONNX_Model(SGG_Model):
     def __init__(self, config, onnx_path, provider='CUDAExecutionProvider', dcs=100, tracking=False, rel_conf=0.1, box_conf=0.5, show_fps=True) -> None:

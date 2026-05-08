@@ -14,6 +14,7 @@ from sgg_benchmark.modeling.make_layers import conv_with_kaiming_uniform
 from . import fpn as fpn_module
 from . import resnet
 from .yolo import YoloModel
+from .yolo_seg import YoloSegModel
 from .yoloworld import YoloWorldModel
 from .yoloe import YOLOEDetectionModel
 
@@ -43,10 +44,17 @@ def build_yolo_backbone(cfg: DictConfig) -> nn.Module:
         YOLO model with out_channels attribute
     """
     nc = cfg.model.roi_box_head.num_classes - 1
+    # nc = cfg.model.roi_box_head.num_classes
     model = YoloModel(cfg, nc=nc)
     model.out_channels = cfg.model.yolo.out_channels
     return model
 
+@registry.BACKBONES.register("yolo_seg")
+def build_yolo_seg_backbone(cfg: DictConfig) -> nn.Module:
+    nc = cfg.model.roi_box_head.num_classes
+    model = YoloSegModel(cfg, nc=nc)
+    model.out_channels = cfg.model.yolo.out_channels
+    return model
 
 @registry.BACKBONES.register("yoloworld")
 def build_yoloworld_backbone(cfg: DictConfig) -> nn.Module:

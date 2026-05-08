@@ -1,14 +1,6 @@
 # @package _global_
-# REACT++.yaml — Canonical REACT++ config for PSG
-# ════════════════════════════════════════════════════════════════════════════
-# Architecture : DAMP (Detection-Anchored Multi-Scale Pooling) + P5SceneContextExtractor
-# Object feats : DAMPBoxFeatureExtractor, P3+P4+P5 Gaussian r=1 neighbourhood
-# Relation head: REACTPlusPlusPredictor with AIFI scene-context branch
-# Text embedding: glove.6B
-#
-# Dataset: PSG — 133 object classes, 57 relation classes
 
-output_dir: "./checkpoints/PSG/react_pp"
+output_dir: "./checkpoints/CUSTOM/react_pp_yolo12m"
 glove_dir: "datasets/"
 
 seed: 42
@@ -17,7 +9,7 @@ dtype: "float32"
 verbose: "INFO"
 
 input:
-  img_size: [640, 640]  # [W, H]
+  img_size: [640, 640]
   pixel_mean: [102.9801, 115.9465, 122.7717]
   pixel_std: [1.0, 1.0, 1.0]
   to_bgr255: true
@@ -30,9 +22,9 @@ input:
   vertical_flip_prob_train: 0.0
 
 datasets:
-  name: "PSG"
+  name: "CUSTOM"
   type: "coco"
-  data_dir: "datasets/PSG/coco_format"
+  data_dir: "datasets/custom/sgg_coco"
 
 dataloader:
   num_workers: 8
@@ -43,44 +35,43 @@ model:
   relation_on: true
   device: "cuda"
   meta_architecture: "GeneralizedYOLO"
-  pretrained_detector_ckpt: "checkpoints/BACKBONES/PSG_yolo12m_backbone.pt"
-  text_embedding: "glove.6B"      
+  # pretrained_detector_ckpt: "checkpoints/BACKBONES/PSG_yolo12m_backbone.pt"
+  pretrained_detector_ckpt: "runs/detect/train/weights/best.pt"
+  # pretrained_detector_ckpt: "runs/segment/train/weights/best.pt"
+  text_embedding: "glove.6B"
   box_head: false
 
   backbone:
     type: "yolo"
+    # type: "yolo_seg"
     nms_thresh: 0.001
     freeze: true
+    # freeze: false
     freeze_at: 10
 
   yolo:
     size: "yolo12m"
-    out_channels: [256, 512, 512]  # yolov8: n=[64,128,256] s=[128,256,512] m=[192,384,576] l=[256,512,512]
-                                    # yolo12: n=[64,128,256] s=[128,256,512] m=[256,512,512] l=[256,512,512]
+    # size: "yolo12m-seg"
+    out_channels: [256, 512, 512]
 
   roi_box_head:
-    # DAMP: gathers P3+P4+P5 3×3 Gaussian-weighted neighbourhood at the YOLO
-    # detection peak — O(N·K·L) integer gathers, K=9, L=3, zero extra params.
     feature_extractor: "DAMPBoxFeatureExtractor"
-    feat_idx_multiscale: true     # gather all 3 FPN levels
-    feat_idx_neighbors: 1         # 3×3 Gaussian neighbourhood per level
+    feat_idx_multiscale: true
+    feat_idx_neighbors: 1
     mlp_head_dim: 256
-    num_classes: 133
+    num_classes: 11
 
   roi_heads:
-    fg_iou_threshold: 0.35        # PSG has overlapping panoptic segments
+    fg_iou_threshold: 0.35
     nms: 0.5
     detections_per_img: 100
 
   roi_relation_head:
     predictor: "REACTPlusPlusPredictor"
-    # P5SceneContextExtractor: pools P5 (20×20) to 4×4 = 16 scene tokens,
-    # applies one AIFI self-attention layer, then relation reps cross-attend
-    # to those 16 tokens for global scene context.
     feature_extractor: "P5SceneContextExtractor"
     use_scene_context: true
 
-    num_classes: 57
+    num_classes: 7
 
     mlp_head_dim: 512
     embed_dim: 200
@@ -125,7 +116,7 @@ solver:
   gamma: 0.5
   steps: [41000, 50000]
   warmup_factor: 0.1
-  warmup_epochs: 2              # CLIP lift layers need longer warmup
+  warmup_epochs: 2
   warmup_method: "linear"
   checkpoint_period: 250
   grad_norm_clip: 1.0
@@ -153,7 +144,7 @@ test:
     enabled: false
     h_flip: false
     scales: []
-    max_size: 100000
+    max_size: 70000
     scale_h_flip: false
 
   save_proposals: false

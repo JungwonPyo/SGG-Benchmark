@@ -451,11 +451,17 @@ class REACTPlusPlusPredictor(BasePredictor):
             nn.Linear(D * 2, D, bias=False),
         )
 
+        # # foreground predicate names only
+        # self.num_rel_fg = len(self.rel_classes)
+
+        # # relation classifier / logits include background class 0
+        # self.num_rel_cls = self.num_rel_fg + 1
+
         # ── 8. Prototype bank ─────────────────────────────────────────────────
         # Learnable prototypes (trained by gradient) + EMA shadow (training only).
         self.proto_weight = nn.Parameter(torch.empty(self.num_rel_cls, D))
         nn.init.normal_(self.proto_weight, std=D ** -0.5)
-
+ 
         self.proto_ema = PrototypeMomentumBuffer(
             self.num_rel_cls, D, momentum=0.999)
 
@@ -532,12 +538,31 @@ class REACTPlusPlusPredictor(BasePredictor):
 
         return obj_proto_kv, pred_proto_kv, protos_norm, protos_proj
 
+    # def _encode_labels(self, proposals):
+    #     """One-hot or GT labels → entity_dists [N, C], entity_preds [N]."""
+    #     obj_labels = cat([p["labels"] for p in proposals], dim=0).long()
+    #     # Use len(obj_classes) for consistency with self.obj_embed size.
+    #     entity_dists = to_onehot(obj_labels, len(self.obj_classes))
+    #     return entity_dists, obj_labels
+    
     def _encode_labels(self, proposals):
-        """One-hot or GT labels → entity_dists [N, C], entity_preds [N]."""
-        obj_labels = cat([p["labels"] for p in proposals], dim=0).long()
-        # Use len(obj_classes) for consistency with self.obj_embed size.
-        entity_dists = to_onehot(obj_labels, len(self.obj_classes))
-        return entity_dists, obj_labels
+        """Proposal labels are 1-based; convert to 0-based for embeddings/one-hot."""
+        obj_labels_1b = cat([p["labels"] for p in proposals], dim=0).long()   # 1..C
+        obj_labels_0b = obj_labels_1b - 1                                     # 0..C-1
+
+        n_cls = len(self.obj_classes)
+        if obj_labels_0b.numel() > 0:
+            tmin = int(obj_labels_0b.min().item())
+            tmax = int(obj_labels_0b.max().item())
+            if tmin < 0 or tmax >= n_cls:
+                raise ValueError(
+                    f"obj_labels_0b out of range: min={tmin}, max={tmax}, "
+                    f"n_cls={n_cls}, raw_1b_min={int(obj_labels_1b.min().item())}, "
+                    f"raw_1b_max={int(obj_labels_1b.max().item())}"
+                )
+
+        entity_dists = to_onehot(obj_labels_0b, n_cls)
+        return entity_dists, obj_labels_0b
 
     def _geom_bias(self, proposals):
         """Compute per-object geometry RoPE biases [N_total, d_rope]."""

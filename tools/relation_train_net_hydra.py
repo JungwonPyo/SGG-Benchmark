@@ -319,6 +319,8 @@ def main_hydra(hydra_cfg: DictConfig, args):
     # Extract num classes from training dataset
     if train_data_loader is not None:
         train_dataset = train_data_loader.dataset
+        logger.info("Object classes: {}".format(train_dataset.ind_to_classes))
+        logger.info("Predicate classes: {}".format(train_dataset.ind_to_predicates))
         num_obj_classes = len(train_dataset.ind_to_classes) if hasattr(train_dataset, 'ind_to_classes') else 0
         num_rel_classes = len(train_dataset.ind_to_predicates) if hasattr(train_dataset, 'ind_to_predicates') else 0
         

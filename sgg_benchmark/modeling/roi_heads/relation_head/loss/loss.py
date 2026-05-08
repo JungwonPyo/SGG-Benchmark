@@ -191,7 +191,21 @@ class RelationLossComputation(nn.Module):
         if refine_obj_logits is not None:
             if not isinstance(refine_obj_logits, torch.Tensor):
                 refine_obj_logits = cat(refine_obj_logits, dim=0)
-            loss_refine_obj = self.criterion_loss_obj(refine_obj_logits, fg_labels.long())
+            # loss_refine_obj = self.criterion_loss_obj(refine_obj_logits, fg_labels.long())
+            obj_targets = fg_labels.long()
+            num_obj_classes = refine_obj_logits.size(1)
+            # Convert 1-based proposal labels -> 0-based CE targets when needed
+            if obj_targets.numel() > 0:
+                tmin = int(obj_targets.min().item())
+                tmax = int(obj_targets.max().item())
+                if tmin >= 1 and tmax == num_obj_classes:
+                    obj_targets = obj_targets - 1
+                elif tmin < 0 or tmax >= num_obj_classes:
+                    raise ValueError(
+                        f"Invalid object targets for refine loss: "
+                        f"min={tmin}, max={tmax}, num_classes={num_obj_classes}"
+                    )
+            loss_refine_obj = self.criterion_loss_obj(refine_obj_logits, obj_targets)
 
         # The following code is used to calculate sampled attribute loss
         if self.attri_on and refine_att_logits is not None:
