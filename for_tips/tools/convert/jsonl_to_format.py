@@ -1,12 +1,31 @@
 import json
 import random
 import shutil
+from collections import Counter
 from pathlib import Path
+from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
 from PIL import Image
 
+
+def read_class_list(txt_path: str | Path) -> List[str]:
+    txt_path = Path(txt_path)
+    if not txt_path.exists():
+        raise FileNotFoundError(f"Class txt file not found: {txt_path}")
+
+    items = []
+    with open(txt_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            items.append(line)
+
+    if len(items) == 0:
+        raise ValueError(f"No valid class names found in: {txt_path}")
+    return items
 
 # =========================
 # User settings
@@ -20,31 +39,43 @@ TRAIN_RATIO = 0.8
 VAL_RATIO = 0.1
 TEST_RATIO = 0.1
 
-FIXED_CLASS_NAMES = [
-    "__background__",
-    "부품 박스", "플라스틱 트레이", "공정 부품", "드라이버", "작업자 손",
-    "조립 지그", "폐기 박스", "렌치", "케이블 묶음", "보호 고글", "엔드 이펙터"
-]
+# FIXED_CLASS_NAMES = [
+#     "__background__",
+#     "부품 박스", "플라스틱 트레이", "공정 부품", "드라이버", "작업자 손",
+#     "조립 지그", "폐기 박스", "렌치", "케이블 묶음", "보호 고글", "엔드 이펙터"
+# ]
 
-CLASS_NAME_MAP = {
-    "__background__": "__background__",
-    "부품 박스": "parts box",
-    "플라스틱 트레이": "plastic tray",
-    "공정 부품": "workpiece",
-    "드라이버": "screwdriver",
-    "작업자 손": "hand",
-    "조립 지그": "assembly jig",
-    "폐기 박스": "waste box",
-    "렌치": "wrench",
-    "케이블 묶음": "cable bundle",
-    "보호 고글": "safety goggles",
-    "엔드 이펙터": "end effector"
-}
+FIXED_CLASS_NAMES = read_class_list("datasets/custom/object_classes.txt")
 
-FIXED_PREDICATE_NAMES = [
-    # "__background__", 
-    "on", "inside", "beside", "above", "touching", "near"
-    ]
+FIXED_CLASS_NAMES.insert(0, "__background__")  # Ensure background is first class
+
+FIXED_CLASS_NAMES_ENG = read_class_list("datasets/custom/object_classes_eng.txt")
+
+FIXED_CLASS_NAMES_ENG.insert(0, "__background__")
+
+CLASS_NAME_MAP = {kor: eng for kor, eng in zip(FIXED_CLASS_NAMES, FIXED_CLASS_NAMES_ENG)}
+
+# CLASS_NAME_MAP = {
+#     "__background__": "__background__",
+#     "부품 박스": "parts box",
+#     "플라스틱 트레이": "plastic tray",
+#     "공정 부품": "workpiece",
+#     "드라이버": "screwdriver",
+#     "작업자 손": "hand",
+#     "조립 지그": "assembly jig",
+#     "폐기 박스": "waste box",
+#     "렌치": "wrench",
+#     "케이블 묶음": "cable bundle",
+#     "보호 고글": "safety goggles",
+#     "엔드 이펙터": "end effector"
+# }
+
+# FIXED_PREDICATE_NAMES = [
+#     # "__background__", 
+#     "on", "inside", "beside", "above", "touching", "near"
+#     ]
+
+FIXED_PREDICATE_NAMES = read_class_list("datasets/custom/relation_classes.txt")
 
 MASK_VALUE_MODE = "object_id_number"
 

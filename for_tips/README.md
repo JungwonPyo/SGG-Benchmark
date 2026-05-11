@@ -55,3 +55,19 @@ CUDA_VISIBLE_DEVICES=0 uv run python tools/eval_onnx_psg.py \
 
 
 ```
+
+## To train situation network
+```bash
+
+cd for_tips/situation_gnn
+chmod +x ./scripts/*
+./scripts/train_binary.sh
+./scripts/train_meaningful_multiclass.sh
+./scripts/train_multiclass.sh
+
+uv run python infer_situation_gnn.py \
+  --checkpoint runs/situation_multiclass/best_model.pt \
+  --input /home/dxr-labtop/SGG-Benchmark/datasets/custom/annotations.jsonl \
+  --output runs/situation_multiclass/predictions.jsonl
+
+```bash

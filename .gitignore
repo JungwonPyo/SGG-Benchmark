@@ -64,3 +64,4 @@ output/
 .venv
 
 for_tips/data/segment_1
+for_tips/situation_gnn/runs

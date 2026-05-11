@@ -5,6 +5,9 @@ tqdm
 torchtext
 pandas
 scipy
+scikit-learn
+pillow
+tqdm
 opencv-python
 loguru
 wandb
