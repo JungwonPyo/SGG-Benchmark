@@ -70,4 +70,27 @@ uv run python infer_situation_gnn.py \
   --input /home/dxr-labtop/SGG-Benchmark/datasets/custom/annotations.jsonl \
   --output runs/situation_multiclass/predictions.jsonl
 
+```
+
+## To run as inference
 ```bash
+# Run Gemini335L
+env -u LD_LIBRARY_PATH ROS_LOG_DIR="$HOME/.ros/log" LD_LIBRARY_PATH=/opt/ros/humble/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu/gazebo-11/plugins ros2 launch orbbec_camera gemini_330_series.launch.py enable_colored_point_cloud:=true
+
+uv run python for_tips/tools/ros2_scene_understanding_node.py \
+  --sgg-config checkpoints/CUSTOM/react_pp_yolo12m/config.yml \
+  --sgg-weights checkpoints/CUSTOM/react_pp_yolo12m/model.onnx \
+  --gnn-checkpoint for_tips/situation_gnn/runs/situation_multiclass/best_model.pt \
+  --rgb-topic /camera/color/image_raw \
+  --depth-topic /camera/depth/image_raw \
+  --camera-info-topic /camera/color/camera_info \
+  --viz-topic /scene_graph/debug_image \
+  --result-topic /scene_graph/result \
+  --box-conf 0.5 \
+  --rel-conf 0.1
+
+# If numpy version error
+uv init --name sgg-benchmark
+uv add "numpy<2"
+
+```
