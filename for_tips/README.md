@@ -94,3 +94,13 @@ uv init --name sgg-benchmark
 uv add "numpy<2"
 
 ```
+
+## To build custom msgs
+```bash
+
+cd tips_ws
+colcon build --packages-select scene_understanding_msgs
+source install/setup.bash # or source install/local_setup.bash
+ros2 interface show scene_understanding_msgs/msg/SceneContext
+
+```

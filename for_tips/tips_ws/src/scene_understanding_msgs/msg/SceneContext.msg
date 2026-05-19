@@ -1,0 +1,9 @@
+std_msgs/Header header
+
+string scene_id
+string planner_frame
+
+scene_understanding_msgs/CameraModel camera
+scene_understanding_msgs/SituationHypothesis situation
+scene_understanding_msgs/DetectedObject3D[] objects
+scene_understanding_msgs/SceneRelation[] relationships
