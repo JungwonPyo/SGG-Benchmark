@@ -36,8 +36,8 @@ model:
   device: "cuda"
   meta_architecture: "GeneralizedYOLO"
   # pretrained_detector_ckpt: "checkpoints/BACKBONES/PSG_yolo12m_backbone.pt"
-  pretrained_detector_ckpt: "runs/detect/train/weights/best.pt"
-  # pretrained_detector_ckpt: "runs/segment/train/weights/best.pt"
+  # pretrained_detector_ckpt: "runs/detect/train/weights/best.pt"
+  pretrained_detector_ckpt: "runs/segment/train/weights/best.pt"
   text_embedding: "glove.6B"
   box_head: false
 
@@ -59,7 +59,8 @@ model:
     feat_idx_multiscale: true
     feat_idx_neighbors: 1
     mlp_head_dim: 256
-    num_classes: 11
+    # num_classes: 11
+    num_classes: 10
 
   roi_heads:
     fg_iou_threshold: 0.35
@@ -71,7 +72,8 @@ model:
     feature_extractor: "P5SceneContextExtractor"
     use_scene_context: true
 
-    num_classes: 7
+    # num_classes: 7
+    num_classes: 8
 
     mlp_head_dim: 512
     embed_dim: 200

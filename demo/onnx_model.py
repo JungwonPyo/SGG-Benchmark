@@ -49,6 +49,8 @@ class SGG_ONNX_Model(SGG_Model):
             import json as _json
             _obj = _json.loads(_meta['obj_classes'])
             _rel = _json.loads(_meta['rel_classes'])
+            print(_obj)
+            print(_rel)
             # Normalise to the same dict format used by get_dataset_statistics.
             # Background (index 0) was stripped at export time, so obj classes start at 1
             # to match the 1-based label indices the model outputs.

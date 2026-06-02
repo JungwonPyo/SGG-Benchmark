@@ -4,7 +4,7 @@ set -e
 DATA="/home/dxr-labtop/SGG-Benchmark/datasets/custom/annotations.jsonl"
 OUTDIR="./runs/situation_meaningful_multiclass"
 
-uv run python train_situation_gnn.py \
+uv run python train_situation_gnn_recursive.py \
   --data "${DATA}" \
   --outdir "${OUTDIR}" \
   --task meaningful_multiclass \

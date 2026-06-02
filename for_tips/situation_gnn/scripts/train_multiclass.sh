@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -e
 
-DATA="/home/dxr-labtop/SGG-Benchmark/datasets/custom/annotations.jsonl"
+# DATA="/home/dxr-labtop/SGG-Benchmark/datasets/custom/annotations.jsonl"
+DATA="/home/dxr-labtop/SGG-Benchmark/datasets/custom"
 OUTDIR="./runs/situation_multiclass"
 
-uv run python train_situation_gnn.py \
+uv run python train_situation_gnn_recursive.py \
   --data "${DATA}" \
   --outdir "${OUTDIR}" \
   --task multiclass \
