@@ -25,6 +25,7 @@ TEST_RATIO = 0.1
 
 FIXED_CLASS_NAMES = read_class_list(DATASET_ROOT / "object_classes.txt")
 MASK_VALUE_MODE = "object_id_number"
+# MASK_VALUE_MODE = "mask_value_field"
 MIN_AREA = 10
 APPROX_EPSILON_RATIO = 0.002
 KEEP_ONLY_LARGEST = True
@@ -208,7 +209,17 @@ def process_split(records, split_name, class_map):
         stats["label_rows_written"] += len(lines)
         stats["objects_missing_mask"] += len(missing)
         if missing:
-            print(f"[WARN] {dst_img.name}: missing/empty masks for {missing}")
+            # print(f"[WARN] {dst_img.name}: missing/empty masks for {missing}")
+            print(
+                "[WARN] missing/empty masks\n"
+                f"  split      : {split_name}\n"
+                f"  scene_id   : {rec.get('scene_id', 'N/A')}\n"
+                f"  image_path : {src_img}\n"
+                f"  mask_path  : {src_mask}\n"
+                f"  output_img : {dst_img}\n"
+                f"  label_path : {label_path}\n"
+                f"  missing    : {missing}"
+            )
     return stats
 
 

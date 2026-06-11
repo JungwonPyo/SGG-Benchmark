@@ -71,6 +71,11 @@ CUDA_VISIBLE_DEVICES=0 uv run python tools/export_onnx.py \
 CUDA_VISIBLE_DEVICES=0 uv run python tools/eval_onnx_psg.py \
 --run-dir checkpoints/CUSTOM/react_pp_yolo12m --provider CUDAExecutionProvider
 
+# Evaluation with ONNX, with custom for certification
+# Results are saved in: checkpoints/CUSTOM/react_pp_yolo12m/inference_onnx/onnx_eval_summary.json
+CUDA_VISIBLE_DEVICES=0 uv run python tools/eval_onnx_psg_custom.py \
+--run-dir checkpoints/CUSTOM/react_pp_yolo12m --provider CUDAExecutionProvider
+
 
 ```
 
@@ -87,6 +92,8 @@ chmod +x ./scripts/*
 ./scripts/train_multiclass.sh
 # Train all classes with augmentation
 ./scripts/train_multiclass_with_aug.sh
+# Train all classes with augmentation and SGG network results
+./scripts/train_multiclass_with_aug_sgg.sh
 
 uv run python infer_situation_gnn.py \
   --checkpoint runs/situation_multiclass/best_model.pt \

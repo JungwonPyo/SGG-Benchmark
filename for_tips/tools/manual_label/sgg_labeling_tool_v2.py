@@ -26,23 +26,39 @@ from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 # --- CONFIGURATION ---
-# SAM_MODEL_PATH = "/home/dxr/ros2_ws/src/Grounded-SAM-2/checkpoints/sam2.1_hiera_large.pt"
-# SAM_MODEL_CFG = "configs/sam2.1/sam2.1_hiera_l.yaml"
-SAM_MODEL_PATH = "/home/dxr-labtop/DAS_Pick_and_Place/Grounded-SAM-2/checkpoints/sam2.1_hiera_small.pt"
-SAM_MODEL_CFG = "configs/sam2.1/sam2.1_hiera_s.yaml"
+SAM_MODEL_PATH = "/home/dxr/RRT_Tools/src/Grounded-SAM-2/checkpoints/sam2.1_hiera_large.pt"
+SAM_MODEL_CFG = "configs/sam2.1/sam2.1_hiera_l.yaml"
 
 CLASSES = [
     "부품 박스", "플라스틱 트레이", "공정 부품", "드라이버", "작업자 손",
-    "조립 지그", "폐기 박스", "렌치", "케이블 묶음", "보호 고글", "엔드 이펙터"
+    "검사 지그", "렌치", "케이블 묶음", "보호 고글", "그리퍼"
 ]
-RELATIONS = ["on", "inside", "beside", "above", "touching","near"]
-SITUATIONS = ["S0: 상황 없음","S1: 손 진입", "S2: 접근로 점유", "S3: 팔 궤적 간섭", "S4: 인간 접촉", "S5: 배치로 점유"]
-PATH_MODS = ["stop", "detour", "retarget", "wait", "delay", "normal"]
+RELATIONS = ["on", "inside", "beside", "above", "touching","near", "gripping"]
+SITUATIONS = ["S0: 상황 없음","S1: 대상 물체 없음", "S2: 손 접촉", "S3: 로봇 경로 간섭", "S4: 부품박스 없음", "S5: 배치로 점유"]
+PATH_MODS = ["stop", "retarget", "wait", "delay", "normal"]
 
 # Random colors for instances
 COLORS = [
-    (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 165, 0), (128, 0, 128),
-    (0, 128, 128), (255, 20, 147), (139, 69, 19), (128, 128, 0), (0, 191, 255)
+    (255, 0, 0),    # Red
+    (0, 255, 0),    # Green
+    (0, 0, 255),    # Blue
+    (255, 165, 0),  # Orange
+    (128, 0, 128),  # Purple
+    (0, 128, 128),  # Teal
+    (255, 20, 147), # DeepPink
+    (139, 69, 19),  # SaddleBrown
+    (128, 128, 0),  # Olive
+    (0, 191, 255),  # DeepSkyBlue
+    (255, 215, 0),  # Gold
+    (50, 205, 50),  # LimeGreen
+    (186, 85, 211), # MediumOrchid
+    (255, 69, 0),   # OrangeRed
+    (70, 130, 180), # SteelBlue
+    (210, 105, 30), # Chocolate
+    (154, 205, 50), # YellowGreen
+    (219, 112, 147),# PaleVioletRed
+    (0, 250, 154),  # MediumSpringGreen
+    (100, 149, 237) # CornflowerBlue
 ]
 
 class ImageGraphicsView(QGraphicsView):
@@ -64,6 +80,20 @@ class ImageGraphicsView(QGraphicsView):
             event.accept()
         else:
             super().wheelEvent(event)
+
+    def keyPressEvent(self, event):
+        # Shift 키를 누르면 드래그 모드를 해제하고 마우스 커서를 일반 삼각형 화살표로 변경
+        if event.key() == Qt.Key_Shift:
+            self.setDragMode(QGraphicsView.NoDrag)
+            self.viewport().setCursor(Qt.ArrowCursor)
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        # Shift 키를 떼면 다시 화면 이동(손바닥) 모드로 복구
+        if event.key() == Qt.Key_Shift:
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+            self.viewport().unsetCursor()
+        super().keyReleaseEvent(event)
 
     def mousePressEvent(self, event):
         if event.button() in (Qt.LeftButton, Qt.RightButton):
@@ -93,16 +123,19 @@ class SceneGraphLabeler(QMainWindow):
         self.image_paths = []
         self.current_idx = -1
         self.current_image_pil = None
+        self.show_masks = True  # 뷰어 마스크 표시 상태 토글 변수
 
         # Instance & Scene State
         self.instances = []    # list of dicts: id, class, bbox, mask (np.array)
         self.relations = []    # list of dicts: subject, predicate, object
 
-        # SAM & Polygon State
+        # SAM & Polygon 시퀀스 State
         self.input_points = []
         self.input_labels = []
         self.current_sam_mask = None
         self.polygon_points = [] # 직접 선을 따기 위한 좌표 리스트
+        
+        self.preview_dialog = None # 미리보기 창 상태 저장용 변수 추가
 
         self.init_ui()
         self.init_shortcuts()  # 단축키 초기화
@@ -147,9 +180,18 @@ class SceneGraphLabeler(QMainWindow):
         shortcut_clear = QShortcut(QKeySequence(Qt.Key_C), self)
         shortcut_clear.activated.connect(self.clear_sam_prompts)
 
+        # V 단축키: 마스크 보이기/숨기기 토글
+        shortcut_toggle_masks = QShortcut(QKeySequence(Qt.Key_V), self)
+        shortcut_toggle_masks.activated.connect(self.toggle_masks_visibility)
+
         # Shift+F 단축키: 이전 파일 데이터 불러오기
         shortcut_load_prev = QShortcut(QKeySequence("Shift+F"), self)
         shortcut_load_prev.activated.connect(self.load_previous_annotation)
+        
+        # Shift+V 단축키: 마스크 겹침 미리보기 토글
+        shortcut_mask_preview = QShortcut(QKeySequence("Shift+V"), self)
+        shortcut_mask_preview.setContext(Qt.ApplicationShortcut) # 창이 띄워져 있을 때도 인식하도록 설정
+        shortcut_mask_preview.activated.connect(self.show_mask_preview)
 
     def init_ui(self):
         main_widget = QWidget()
@@ -185,11 +227,16 @@ class SceneGraphLabeler(QMainWindow):
 
         # Controls Hint
         sam_ctrl_layout = QHBoxLayout()
-        btn_clear_sam = QPushButton("🧹 Clear Current Prompts (단축키: C)")
+        btn_clear_sam = QPushButton("🧹 Clear Prompts (C)")
         btn_clear_sam.clicked.connect(self.clear_sam_prompts)
-        hint_text = ("<i>좌/우클릭: SAM 추가/제거 | Shift+좌클릭: 폴리곤 추가 | Shift+우클릭: 폴리곤 닫기</i><br>"
+        
+        btn_toggle_masks = QPushButton("👁️ 마스크 숨기기/보기 (V)")
+        btn_toggle_masks.clicked.connect(self.toggle_masks_visibility)
+
+        hint_text = ("<i>좌/우클릭: SAM 추가/제거 | Shift+좌클릭: 폴리곤 추가 | Shift+우클릭: 닫기</i><br>"
                      "<i>이전 이미지: A | 다음 이미지: D</i>")
         sam_ctrl_layout.addWidget(QLabel(hint_text))
+        sam_ctrl_layout.addWidget(btn_toggle_masks)
         sam_ctrl_layout.addWidget(btn_clear_sam)
         center_layout.addLayout(sam_ctrl_layout)
 
@@ -277,7 +324,7 @@ class SceneGraphLabeler(QMainWindow):
 
         right_layout.addWidget(QFrame(frameShape=QFrame.HLine))
 
-        # 3. Scene Meta & Save
+        ## 3. Scene Meta & Save
         right_layout.addWidget(QLabel("<b>3. Scene Attributes</b>"))
         self.sit_combo = QComboBox()
         self.sit_combo.addItems(SITUATIONS)
@@ -286,7 +333,7 @@ class SceneGraphLabeler(QMainWindow):
         right_layout.addWidget(self.sit_combo)
         right_layout.addWidget(self.pmod_combo)
 
-        btn_preview = QPushButton("👁️ 마스크 겹침 미리보기")
+        btn_preview = QPushButton("👁️ 마스크 겹침 미리보기 (Shift+V)")
         btn_preview.clicked.connect(self.show_mask_preview)
         right_layout.addWidget(btn_preview)
 
@@ -300,6 +347,19 @@ class SceneGraphLabeler(QMainWindow):
 
         # Splitter ratios
         splitter.setSizes([200, 800, 400])
+
+    def keyPressEvent(self, event):
+        # 뷰어가 아닌 메인 윈도우가 포커스를 가질 때도 Shift 키 감지
+        if event.key() == Qt.Key_Shift:
+            self.view.setDragMode(QGraphicsView.NoDrag)
+            self.view.viewport().setCursor(Qt.ArrowCursor)
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key_Shift:
+            self.view.setDragMode(QGraphicsView.ScrollHandDrag)
+            self.view.viewport().unsetCursor()
+        super().keyReleaseEvent(event)
 
     def load_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Image Folder")
@@ -329,6 +389,15 @@ class SceneGraphLabeler(QMainWindow):
         """D 단축키: 다음 이미지로 이동"""
         if self.current_idx < len(self.image_paths) - 1:
             self.img_list_widget.setCurrentRow(self.current_idx + 1)
+
+    def toggle_masks_visibility(self):
+        """V 단축키: 마스크 오버레이 보이기/숨기기 토글"""
+        self.show_masks = not self.show_masks
+        self.redraw_scene()
+        if self.show_masks:
+            self.statusBar().showMessage("👁️ 마스크 표시가 켜졌습니다.", 2000)
+        else:
+            self.statusBar().showMessage("👁️ 마스크가 일시적으로 숨겨졌습니다. (숨김 상태에서도 작업은 정상 저장됩니다)", 3000)
 
     def select_image(self, idx):
         if idx < 0 or idx >= len(self.image_paths): return
@@ -653,109 +722,109 @@ class SceneGraphLabeler(QMainWindow):
 
         # 1. Base Image
         img_q = self.pil_to_qimage(self.current_image_pil)
-
-        # 현재 리스트에서 선택된 행 가져오기
         selected_row = self.inst_list_widget.currentRow()
-
-        # 2. Draw Committed Instance Masks & BBoxes
         painter = QPainter(img_q)
-        for i, inst in enumerate(self.instances):
-            color = COLORS[i % len(COLORS)]
-            
-            # 선택된 인스턴스면 불투명도(alpha)를 높여 찐하게 표시하고, 아니면 투명도를 낮춤
-            # 리스트에 선택된 게 없으면(selected_row == -1) 모두 중간 정도로 보이게 처리
-            if selected_row == -1:
-                alpha_val = 100
-                pen_width = 2
-            else:
-                alpha_val = 220 if i == selected_row else 60
-                pen_width = 4 if i == selected_row else 1
-            
-            # Draw Mask
-            if "mask" in inst and inst["mask"] is not None:
-                mask = inst["mask"]
-                mask_img = Image.fromarray((mask * alpha_val).astype(np.uint8), mode='L')
-                mask_rgba = Image.new("RGBA", mask_img.size, color + (0,))
+
+        # show_masks가 True일 때만 오버레이 요소를 그립니다.
+        if self.show_masks:
+            # 2. Draw Committed Instance Masks & BBoxes
+            for i, inst in enumerate(self.instances):
+                inst_id_int = int(inst["id"][1:])
+                color = COLORS[inst_id_int % len(COLORS)]
+                
+                # 선택된 인스턴스면 불투명도(alpha)를 높여 찐하게 표시하고, 아니면 투명도를 낮춤
+                if selected_row == -1:
+                    alpha_val = 100
+                    pen_width = 2
+                else:
+                    alpha_val = 220 if i == selected_row else 60
+                    pen_width = 4 if i == selected_row else 1
+                
+                # Draw Mask
+                if "mask" in inst and inst["mask"] is not None:
+                    mask = inst["mask"]
+                    mask_img = Image.fromarray((mask * alpha_val).astype(np.uint8), mode='L')
+                    mask_rgba = Image.new("RGBA", mask_img.size, color + (0,))
+                    mask_rgba.putalpha(mask_img)
+                    q_mask = self.pil_to_qimage(mask_rgba)
+                    painter.drawImage(0, 0, q_mask)
+
+                # Draw BBox
+                b = inst["bbox"]
+                painter.setPen(QPen(QColor(*color), pen_width, Qt.SolidLine))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRect(b[0], b[1], b[2]-b[0], b[3]-b[1])
+
+                # Draw Label
+                painter.setBrush(QColor(*color))
+                painter.setPen(Qt.white)
+                painter.drawRect(b[0], b[1]-15, 40, 15)
+                painter.drawText(b[0]+2, b[1]-3, inst["id"])
+
+            # 3. Draw Relations (Arrows & Text)
+            id_to_bbox = {inst["id"]: inst["bbox"] for inst in self.instances}
+            painter.setRenderHint(QPainter.Antialiasing)
+            import math
+            for rel in self.relations:
+                sub_id = rel["subject"]
+                obj_id = rel["object"]
+                pred = rel["predicate"]
+
+                if sub_id in id_to_bbox and obj_id in id_to_bbox:
+                    b1 = id_to_bbox[sub_id]
+                    b2 = id_to_bbox[obj_id]
+
+                    # Centers of the two bounding boxes
+                    p1 = QPointF((b1[0] + b1[2]) / 2, (b1[1] + b1[3]) / 2)
+                    p2 = QPointF((b2[0] + b2[2]) / 2, (b2[1] + b2[3]) / 2)
+
+                    painter.setPen(QPen(Qt.yellow, 2, Qt.DashLine))
+                    painter.drawLine(p1, p2)
+
+                    # Draw Arrowhead pointing to the object
+                    angle = math.atan2(p2.y() - p1.y(), p2.x() - p1.x())
+                    arrow_size = 15
+                    p3 = QPointF(p2.x() - arrow_size * math.cos(angle - math.pi / 6),
+                                 p2.y() - arrow_size * math.sin(angle - math.pi / 6))
+                    p4 = QPointF(p2.x() - arrow_size * math.cos(angle + math.pi / 6),
+                                 p2.y() - arrow_size * math.sin(angle + math.pi / 6))
+
+                    painter.setBrush(Qt.yellow)
+                    painter.setPen(Qt.NoPen)
+                    painter.drawPolygon(QPolygonF([p2, p3, p4]))
+
+                    # Draw Predicate Text at the midpoint
+                    mid_p = QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
+                    fm = painter.fontMetrics()
+                    text_rect = fm.boundingRect(pred)
+
+                    text_rect.translate(int(mid_p.x() - text_rect.width()/2), int(mid_p.y() - text_rect.height()/2))
+                    text_rect.adjust(-6, -4, 6, 4) 
+
+                    painter.setBrush(QColor(0, 0, 0, 180)) 
+                    painter.setPen(Qt.NoPen)
+                    painter.drawRect(text_rect)
+
+                    painter.setPen(Qt.yellow)
+                    painter.drawText(text_rect, Qt.AlignCenter, pred)
+
+            # 4. Draw Current Active SAM / Polygon Mask
+            if self.current_sam_mask is not None:
+                mask = self.current_sam_mask
+                mask_img = Image.fromarray((mask * 128).astype(np.uint8), mode='L')
+                mask_rgba = Image.new("RGBA", mask_img.size, (255, 255, 0, 0)) # Yellow for active
                 mask_rgba.putalpha(mask_img)
                 q_mask = self.pil_to_qimage(mask_rgba)
                 painter.drawImage(0, 0, q_mask)
 
-            # Draw BBox
-            b = inst["bbox"]
-            painter.setPen(QPen(QColor(*color), pen_width, Qt.SolidLine))
-            painter.setBrush(Qt.NoBrush)
-            painter.drawRect(b[0], b[1], b[2]-b[0], b[3]-b[1])
-
-            # Draw Label
-            painter.setBrush(QColor(*color))
-            painter.setPen(Qt.white)
-            painter.drawRect(b[0], b[1]-15, 40, 15)
-            painter.drawText(b[0]+2, b[1]-3, inst["id"])
-
-        # 3. Draw Relations (Arrows & Text)
-        id_to_bbox = {inst["id"]: inst["bbox"] for inst in self.instances}
-        painter.setRenderHint(QPainter.Antialiasing)
-        import math
-        for rel in self.relations:
-            sub_id = rel["subject"]
-            obj_id = rel["object"]
-            pred = rel["predicate"]
-
-            if sub_id in id_to_bbox and obj_id in id_to_bbox:
-                b1 = id_to_bbox[sub_id]
-                b2 = id_to_bbox[obj_id]
-
-                # Centers of the two bounding boxes
-                p1 = QPointF((b1[0] + b1[2]) / 2, (b1[1] + b1[3]) / 2)
-                p2 = QPointF((b2[0] + b2[2]) / 2, (b2[1] + b2[3]) / 2)
-
-                painter.setPen(QPen(Qt.yellow, 2, Qt.DashLine))
-                painter.drawLine(p1, p2)
-
-                # Draw Arrowhead pointing to the object
-                angle = math.atan2(p2.y() - p1.y(), p2.x() - p1.x())
-                arrow_size = 15
-                p3 = QPointF(p2.x() - arrow_size * math.cos(angle - math.pi / 6),
-                             p2.y() - arrow_size * math.sin(angle - math.pi / 6))
-                p4 = QPointF(p2.x() - arrow_size * math.cos(angle + math.pi / 6),
-                             p2.y() - arrow_size * math.sin(angle + math.pi / 6))
-
-                painter.setBrush(Qt.yellow)
-                painter.setPen(Qt.NoPen)
-                painter.drawPolygon(QPolygonF([p2, p3, p4]))
-
-                # Draw Predicate Text at the midpoint
-                mid_p = QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
-                fm = painter.fontMetrics()
-                text_rect = fm.boundingRect(pred)
-
-                text_rect.translate(int(mid_p.x() - text_rect.width()/2), int(mid_p.y() - text_rect.height()/2))
-                text_rect.adjust(-6, -4, 6, 4) 
-
-                painter.setBrush(QColor(0, 0, 0, 180)) 
-                painter.setPen(Qt.NoPen)
-                painter.drawRect(text_rect)
-
-                painter.setPen(Qt.yellow)
-                painter.drawText(text_rect, Qt.AlignCenter, pred)
-
-        # 4. Draw Current Active SAM / Polygon Mask
-        if self.current_sam_mask is not None:
-            mask = self.current_sam_mask
-            mask_img = Image.fromarray((mask * 128).astype(np.uint8), mode='L')
-            mask_rgba = Image.new("RGBA", mask_img.size, (255, 255, 0, 0)) # Yellow for active
-            mask_rgba.putalpha(mask_img)
-            q_mask = self.pil_to_qimage(mask_rgba)
-            painter.drawImage(0, 0, q_mask)
-
-        # 5. Draw SAM Prompts
+        # 5. Draw SAM Prompts (작업 진행 상황은 마스크를 숨겨도 항상 표시)
         for pt, lbl in zip(self.input_points, self.input_labels):
             color = Qt.green if lbl == 1 else Qt.red
             painter.setPen(Qt.NoPen)
             painter.setBrush(color)
             painter.drawEllipse(pt[0]-4, pt[1]-4, 8, 8)
             
-        # 6. Draw Polygon Lines/Points (진행 중인 폴리곤)
+        # 6. Draw Polygon Lines/Points (작업 진행 상황은 항상 표시)
         if self.polygon_points:
             painter.setPen(QPen(Qt.magenta, 2, Qt.SolidLine))
             for i in range(len(self.polygon_points) - 1):
@@ -771,7 +840,13 @@ class SceneGraphLabeler(QMainWindow):
         self.scene.addItem(QGraphicsPixmapItem(QPixmap.fromImage(img_q)))
 
     def show_mask_preview(self):
-        """저장될 마스크와 동일한 우선순위(레이어 순서)로 시각화된 RGB 팝업창을 띄웁니다."""
+        """저장될 마스크와 동일한 우선순위(레이어 순서)로 시각화된 RGB 팝업창을 띄우거나 닫습니다."""
+        
+        # 이미 창이 열려있다면 닫고 종료 (토글 기능)
+        if self.preview_dialog is not None and self.preview_dialog.isVisible():
+            self.preview_dialog.close()
+            return
+
         if not self.current_image_pil: return
         w, h = self.current_image_pil.size
         
@@ -781,13 +856,14 @@ class SceneGraphLabeler(QMainWindow):
         # 저장될 때와 똑같은 순서로 덮어쓰기 진행
         for i, inst in enumerate(self.instances):
             if "mask" in inst and inst["mask"] is not None:
-                color = COLORS[i % len(COLORS)] # 리스트 컬러와 매칭
+                inst_id_int = int(inst["id"][1:])
+                color = COLORS[inst_id_int % len(COLORS)] # 리스트 컬러와 매칭
                 preview_img[inst["mask"] > 0] = color
 
-        # QDialog 생성
-        preview_dialog = QDialog(self)
-        preview_dialog.setWindowTitle("마스크 겹침 결과 미리보기 (우측 UI 리스트 하단일수록 앞 레이어)")
-        layout = QVBoxLayout(preview_dialog)
+        # QDialog 생성 (인스턴스 변수에 저장)
+        self.preview_dialog = QDialog(self)
+        self.preview_dialog.setWindowTitle("마스크 겹침 결과 미리보기 (우측 UI 리스트 하단일수록 앞 레이어)")
+        layout = QVBoxLayout(self.preview_dialog)
         lbl = QLabel()
 
         bytes_per_line = 3 * w
@@ -800,7 +876,9 @@ class SceneGraphLabeler(QMainWindow):
 
         lbl.setPixmap(pixmap)
         layout.addWidget(lbl)
-        preview_dialog.exec()
+        
+        # 기존 exec() 대신 show()를 사용해야 메인 창과 동시에 조작 가능
+        self.preview_dialog.show()
 
     def pil_to_qimage(self, image):
         image = image.convert("RGBA")

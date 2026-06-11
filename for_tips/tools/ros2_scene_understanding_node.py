@@ -41,6 +41,8 @@ from scene_understanding_msgs.msg import (
     SituationHypothesis,
 )
 
+import threading
+
 
 @dataclass
 class CameraIntrinsics:
@@ -99,6 +101,8 @@ class SceneUnderstandingNode(Node):
             num_obj_classes=len(self.maps["obj_list"]),
             num_rel_classes=len(self.maps["rel_list"]),
             num_situation_classes=len(self.maps["sit_list"]),
+            node_num_dim=7,
+            edge_num_dim=8,
             hidden_dim=self.gnn_ckpt["args"]["hidden_dim"],
             num_layers=self.gnn_ckpt["args"]["num_layers"],
             dropout=self.gnn_ckpt["args"]["dropout"],
@@ -123,48 +127,124 @@ class SceneUnderstandingNode(Node):
         self.get_logger().info(
             f"Typed planner topic enabled: {args.planner_topic}, depth bbox mode: {args.depth_bbox_mode}"
         )
+        
+        self.latest_bundle = None
+        self.bundle_lock = threading.Lock()
+        self.worker_busy = False
+        self.stop_worker = False
+        self.worker = threading.Thread(target=self.worker_loop, daemon=True)
+        self.worker.start()
 
-    def synced_callback(self, rgb_msg: Image, depth_msg: Image, info_msg: CameraInfo):
-        now = time.time()
-        if self.args.max_publish_hz > 0.0:
-            min_dt = 1.0 / self.args.max_publish_hz
-            if now - self.last_pub_time < min_dt:
-                return
+    def synced_callback(self, rgb_msg, depth_msg, info_msg):
+        with self.bundle_lock:
+            self.latest_bundle = (rgb_msg, depth_msg, info_msg)
 
-        try:
-            rgb_bgr = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding="bgr8")
-            depth = self.bridge.imgmsg_to_cv2(depth_msg)
-        except Exception as e:
-            self.get_logger().error(f"Failed to convert ROS images: {e}")
-            return
+    def worker_loop(self):
+        period = 1.0 / self.args.max_publish_hz if self.args.max_publish_hz > 0 else 0.0
+        last_run = 0.0
 
-        try:
-            intr = self.camera_info_to_intrinsics(info_msg)
-            depth_m = self.depth_to_meters(depth, depth_msg.encoding)
-            sgg = self.predict_graph(rgb_bgr)
-            record, planner_objects = self.sgg_arrays_to_record_and_3d(
-                sgg["bboxes"], sgg["rels"], rgb_msg.header.stamp, depth_m, intr
-            )
-            pred = self.predict_situation(record)
-            planner_msg = self.build_scene_context_msg(
-                record=record,
-                planner_objects=planner_objects,
-                pred=pred,
-                rgb_msg=rgb_msg,
-                info_msg=info_msg,
-            )
-            vis = self.draw_overlay_from_arrays(
-                rgb_bgr.copy(),
-                sgg["bboxes"],
-                sgg["rels"],
-                pred["pred_label"],
-                pred["probs"],
-                planner_objects,
-            )
-            self.publish_outputs(vis, record, pred, planner_msg, rgb_msg, info_msg)
-            self.last_pub_time = now
-        except Exception as e:
-            self.get_logger().error(f"Pipeline error: {e}")
+        while rclpy.ok() and not self.stop_worker:
+            now = time.time()
+            if period > 0 and (now - last_run) < period:
+                time.sleep(0.001)
+                continue
+
+            with self.bundle_lock:
+                bundle = self.latest_bundle
+                self.latest_bundle = None
+
+            if bundle is None:
+                time.sleep(0.001)
+                continue
+
+            rgb_msg, depth_msg, info_msg = bundle
+
+            try:
+                rgb_bgr = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding="bgr8")
+                depth = self.bridge.imgmsg_to_cv2(depth_msg)
+
+                intr = self.camera_info_to_intrinsics(info_msg)
+                depth_m = self.depth_to_meters(depth, depth_msg.encoding)
+                sgg = self.predict_graph(rgb_bgr)
+                record, planner_objects = self.sgg_arrays_to_record_and_3d(
+                    sgg["bboxes"], sgg["rels"], rgb_msg.header.stamp, depth_m, intr
+                )
+                pred = self.predict_situation(record)
+                planner_msg = self.build_scene_context_msg(
+                    record=record,
+                    planner_objects=planner_objects,
+                    pred=pred,
+                    rgb_msg=rgb_msg,
+                    info_msg=info_msg,
+                )
+
+                cur_label = "S0"
+                if self.args.situation_thres < pred["probs"][pred["pred_label"]]:
+                    cur_label = pred["pred_label"]
+                else:
+                    if pred["pred_label"] == "S1":
+                        cur_label = pred["pred_label"]
+
+                vis = self.draw_overlay_from_arrays(
+                    rgb_bgr.copy(),
+                    sgg["bboxes"],
+                    sgg["rels"],
+                    cur_label,
+                    pred["probs"],
+                    planner_objects,
+                )
+                self.publish_outputs(vis, record, pred, planner_msg, rgb_msg, info_msg)
+                last_run = time.time()
+
+            except Exception as e:
+                self.get_logger().error(f"Pipeline error: {e}")
+
+    # def synced_callback(self, rgb_msg: Image, depth_msg: Image, info_msg: CameraInfo):
+    #     now = time.time()
+    #     if self.args.max_publish_hz > 0.0:
+    #         min_dt = 1.0 / self.args.max_publish_hz
+    #         if now - self.last_pub_time < min_dt:
+    #             return
+
+    #     try:
+    #         rgb_bgr = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding="bgr8")
+    #         depth = self.bridge.imgmsg_to_cv2(depth_msg)
+    #     except Exception as e:
+    #         self.get_logger().error(f"Failed to convert ROS images: {e}")
+    #         return
+
+    #     try:
+    #         intr = self.camera_info_to_intrinsics(info_msg)
+    #         depth_m = self.depth_to_meters(depth, depth_msg.encoding)
+    #         sgg = self.predict_graph(rgb_bgr)
+    #         record, planner_objects = self.sgg_arrays_to_record_and_3d(
+    #             sgg["bboxes"], sgg["rels"], rgb_msg.header.stamp, depth_m, intr
+    #         )
+    #         pred = self.predict_situation(record)
+    #         planner_msg = self.build_scene_context_msg(
+    #             record=record,
+    #             planner_objects=planner_objects,
+    #             pred=pred,
+    #             rgb_msg=rgb_msg,
+    #             info_msg=info_msg,
+    #         )
+            
+    #         cur_label = 'S0'
+    #         if self.args.situation_thres < pred["probs"][pred["pred_label"]]:
+    #             cur_label = pred["pred_label"]
+                
+    #         vis = self.draw_overlay_from_arrays(
+    #             rgb_bgr.copy(),
+    #             sgg["bboxes"],
+    #             sgg["rels"],
+    #             cur_label,
+    #             pred["probs"],
+    #             planner_objects,
+    #         )
+    #         self.publish_outputs(vis, record, pred, planner_msg, rgb_msg, info_msg)
+    #         self.last_pub_time = now
+    #     except Exception as e:
+    #         self.get_logger().error(f"Pipeline error: {e}")
 
     def camera_info_to_intrinsics(self, info_msg: CameraInfo) -> CameraIntrinsics:
         return CameraIntrinsics(
@@ -575,6 +655,7 @@ def build_argparser():
     p.add_argument("--min-box-size-m", type=float, default=0.03)
     p.add_argument("--min-box-depth-m", type=float, default=0.03)
     p.add_argument("--max-publish-hz", type=float, default=15.0)
+    p.add_argument("--situation-thres", type=float, default=0.80)
     return p
 
 
