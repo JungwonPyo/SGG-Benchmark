@@ -160,16 +160,22 @@ class SceneUnderstandingNode(Node):
             rgb_msg, depth_msg, info_msg = bundle
 
             try:
+                t0 = time.perf_counter()
                 rgb_bgr = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding="bgr8")
                 depth = self.bridge.imgmsg_to_cv2(depth_msg)
+                t1 = time.perf_counter()
 
                 intr = self.camera_info_to_intrinsics(info_msg)
                 depth_m = self.depth_to_meters(depth, depth_msg.encoding)
                 sgg = self.predict_graph(rgb_bgr)
+                t2 = time.perf_counter()
+
                 record, planner_objects = self.sgg_arrays_to_record_and_3d(
                     sgg["bboxes"], sgg["rels"], rgb_msg.header.stamp, depth_m, intr
                 )
                 pred = self.predict_situation(record)
+                t3 = time.perf_counter()
+                
                 planner_msg = self.build_scene_context_msg(
                     record=record,
                     planner_objects=planner_objects,
@@ -177,7 +183,7 @@ class SceneUnderstandingNode(Node):
                     rgb_msg=rgb_msg,
                     info_msg=info_msg,
                 )
-
+                
                 cur_label = "S0"
                 if self.args.situation_thres < pred["probs"][pred["pred_label"]]:
                     cur_label = pred["pred_label"]
@@ -186,65 +192,29 @@ class SceneUnderstandingNode(Node):
                         cur_label = pred["pred_label"]
 
                 vis = self.draw_overlay_from_arrays(
-                    rgb_bgr.copy(),
-                    sgg["bboxes"],
-                    sgg["rels"],
-                    cur_label,
-                    pred["probs"],
-                    planner_objects,
+                    rgb_bgr.copy(), 
+                    sgg["bboxes"], 
+                    sgg["rels"], 
+                    cur_label, 
+                    pred["probs"], 
+                    planner_objects
                 )
+                self.publish_outputs(vis, record, pred, planner_msg, rgb_msg, info_msg)
+                t4 = time.perf_counter()
+
+                self.get_logger().info(
+                    f"convert={(t1-t0)*1000:.1f}ms "
+                    f"sgg={(t2-t1)*1000:.1f}ms "
+                    f"gnn+3d={(t3-t2)*1000:.1f}ms "
+                    f"viz+pub={(t4-t3)*1000:.1f}ms "
+                    f"total={(t4-t0)*1000:.1f}ms"
+                )
+
                 self.publish_outputs(vis, record, pred, planner_msg, rgb_msg, info_msg)
                 last_run = time.time()
 
             except Exception as e:
                 self.get_logger().error(f"Pipeline error: {e}")
-
-    # def synced_callback(self, rgb_msg: Image, depth_msg: Image, info_msg: CameraInfo):
-    #     now = time.time()
-    #     if self.args.max_publish_hz > 0.0:
-    #         min_dt = 1.0 / self.args.max_publish_hz
-    #         if now - self.last_pub_time < min_dt:
-    #             return
-
-    #     try:
-    #         rgb_bgr = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding="bgr8")
-    #         depth = self.bridge.imgmsg_to_cv2(depth_msg)
-    #     except Exception as e:
-    #         self.get_logger().error(f"Failed to convert ROS images: {e}")
-    #         return
-
-    #     try:
-    #         intr = self.camera_info_to_intrinsics(info_msg)
-    #         depth_m = self.depth_to_meters(depth, depth_msg.encoding)
-    #         sgg = self.predict_graph(rgb_bgr)
-    #         record, planner_objects = self.sgg_arrays_to_record_and_3d(
-    #             sgg["bboxes"], sgg["rels"], rgb_msg.header.stamp, depth_m, intr
-    #         )
-    #         pred = self.predict_situation(record)
-    #         planner_msg = self.build_scene_context_msg(
-    #             record=record,
-    #             planner_objects=planner_objects,
-    #             pred=pred,
-    #             rgb_msg=rgb_msg,
-    #             info_msg=info_msg,
-    #         )
-            
-    #         cur_label = 'S0'
-    #         if self.args.situation_thres < pred["probs"][pred["pred_label"]]:
-    #             cur_label = pred["pred_label"]
-                
-    #         vis = self.draw_overlay_from_arrays(
-    #             rgb_bgr.copy(),
-    #             sgg["bboxes"],
-    #             sgg["rels"],
-    #             cur_label,
-    #             pred["probs"],
-    #             planner_objects,
-    #         )
-    #         self.publish_outputs(vis, record, pred, planner_msg, rgb_msg, info_msg)
-    #         self.last_pub_time = now
-    #     except Exception as e:
-    #         self.get_logger().error(f"Pipeline error: {e}")
 
     def camera_info_to_intrinsics(self, info_msg: CameraInfo) -> CameraIntrinsics:
         return CameraIntrinsics(
@@ -282,6 +252,49 @@ class SceneUnderstandingNode(Node):
         bboxes = bboxes.cpu().numpy() if hasattr(bboxes, "cpu") else np.asarray(bboxes)
         rels = rels.cpu().numpy() if hasattr(rels, "cpu") else np.asarray(rels)
         return {"bboxes": bboxes, "rels": rels}
+    
+    def build_overlap_keep_mask(
+        self,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        all_boxes: List[Tuple[int, int, int, int]],
+        target_idx: int,
+    ) -> np.ndarray:
+        h = max(0, y2 - y1)
+        w = max(0, x2 - x1)
+        keep = np.ones((h, w), dtype=bool)
+
+        for j, (ox1, oy1, ox2, oy2) in enumerate(all_boxes):
+            if j == target_idx:
+                continue
+
+            ix1 = max(x1, ox1)
+            iy1 = max(y1, oy1)
+            ix2 = min(x2, ox2)
+            iy2 = min(y2, oy2)
+
+            if ix2 <= ix1 or iy2 <= iy1:
+                continue
+
+            keep[iy1 - y1:iy2 - y1, ix1 - x1:ix2 - x1] = False
+
+        return keep
+
+
+    def build_center_keep_mask(self, h: int, w: int, ratio: float = 0.6) -> np.ndarray:
+        keep = np.zeros((h, w), dtype=bool)
+        ch = max(1, int(h * ratio))
+        cw = max(1, int(w * ratio))
+
+        y1 = max(0, (h - ch) // 2)
+        x1 = max(0, (w - cw) // 2)
+        y2 = min(h, y1 + ch)
+        x2 = min(w, x1 + cw)
+
+        keep[y1:y2, x1:x2] = True
+        return keep
 
     def sgg_arrays_to_record_and_3d(
         self,
@@ -294,6 +307,14 @@ class SceneUnderstandingNode(Node):
         objects: List[Dict[str, Any]] = []
         relationships: List[Dict[str, Any]] = []
         planner_objects: List[Dict[str, Any]] = []
+
+        all_boxes_xyxy = []
+        rough_depths = []
+
+        for b in bboxes:
+            x1, y1, x2, y2 = [int(v) for v in b[:4]]
+            all_boxes_xyxy.append((x1, y1, x2, y2))
+            rough_depths.append(self.estimate_rough_depth(depth_m, x1, y1, x2, y2))
 
         for i, b in enumerate(bboxes):
             x1, y1, x2, y2 = [int(v) for v in b[:4]]
@@ -308,7 +329,18 @@ class SceneUnderstandingNode(Node):
                 "score": score,
             })
 
-            bbox3d = self.estimate_3d_bbox_from_depth(depth_m, intr, x1, y1, x2, y2)
+            bbox3d = self.estimate_3d_bbox_from_depth(
+                depth_m=depth_m,
+                intr=intr,
+                x1=x1,
+                y1=y1,
+                x2=x2,
+                y2=y2,
+                # all_boxes=all_boxes_xyxy,
+                # rough_depths=rough_depths,
+                # target_idx=i,
+            )
+
             planner_objects.append({
                 "id": f"O{i}",
                 "class": cls_name,
@@ -341,6 +373,30 @@ class SceneUnderstandingNode(Node):
         }
         return record, planner_objects
 
+    def filter_depth_cluster(self, zs: np.ndarray) -> np.ndarray:
+        if zs.size == 0:
+            return zs
+
+        z_med = float(np.median(zs))
+        abs_dev = np.abs(zs - z_med)
+        mad = float(np.median(abs_dev))
+
+        if mad < 1e-6:
+            band = self.args.min_z_band_m
+        else:
+            band = self.args.z_mad_scale * 1.4826 * mad
+            band = float(np.clip(band, self.args.min_z_band_m, self.args.max_z_band_m))
+
+        keep = np.abs(zs - z_med) <= band
+        zs_keep = zs[keep]
+
+        if zs_keep.size < 10:
+            lo = np.percentile(zs, 25)
+            hi = np.percentile(zs, 75)
+            zs_keep = zs[(zs >= lo) & (zs <= hi)]
+
+        return zs_keep if zs_keep.size > 0 else zs
+
     def estimate_3d_bbox_from_depth(
         self,
         depth_m: np.ndarray,
@@ -362,38 +418,94 @@ class SceneUnderstandingNode(Node):
         if roi_depth.size == 0:
             return self.empty_bbox3d()
 
-        valid = np.isfinite(roi_depth) & (roi_depth > self.args.min_depth_m) & (roi_depth < self.args.max_depth_m)
-        if not np.any(valid):
+        base_valid = (
+            np.isfinite(roi_depth)
+            & (roi_depth > self.args.min_depth_m)
+            & (roi_depth < self.args.max_depth_m)
+        )
+        if not np.any(base_valid):
             return self.empty_bbox3d()
 
-        ys, xs = np.where(valid)
-        zs = roi_depth[ys, xs]
+        ys, xs = np.where(base_valid)
+        zs = roi_depth[ys, xs].astype(np.float32)
+        if zs.size == 0:
+            return self.empty_bbox3d()
+
+        z_med0 = float(np.median(zs))
+        abs_dev = np.abs(zs - z_med0)
+        mad = float(np.median(abs_dev))
+
+        min_band = getattr(self.args, "min_z_band_m", 0.03)
+        max_band = getattr(self.args, "max_z_band_m", 0.20)
+        mad_scale = getattr(self.args, "z_mad_scale", 2.5)
+        max_box_depth_thickness_m = getattr(self.args, "max_box_depth_thickness_m", 0.25)
+
+        if mad < 1e-6:
+            band = min_band
+        else:
+            band = mad_scale * 1.4826 * mad
+            band = float(np.clip(band, min_band, max_band))
+
+        cluster_keep = np.abs(zs - z_med0) <= band
+        if np.count_nonzero(cluster_keep) >= 10:
+            xs = xs[cluster_keep]
+            ys = ys[cluster_keep]
+            zs = zs[cluster_keep]
+        else:
+            q1 = np.percentile(zs, 25)
+            q3 = np.percentile(zs, 75)
+            iqr_keep = (zs >= q1) & (zs <= q3)
+            if np.count_nonzero(iqr_keep) >= 10:
+                xs = xs[iqr_keep]
+                ys = ys[iqr_keep]
+                zs = zs[iqr_keep]
+
+        if zs.size == 0:
+            return self.empty_bbox3d()
+
+        if zs.shape[0] > self.args.max_points_per_object:
+            idx = np.random.choice(zs.shape[0], self.args.max_points_per_object, replace=False)
+            xs = xs[idx]
+            ys = ys[idx]
+            zs = zs[idx]
+
+        z_med = float(np.median(zs))
 
         if self.args.depth_bbox_mode == "center":
             cx = (x1 + x2) / 2.0
             cy = (y1 + y2) / 2.0
-            z = float(np.median(zs))
-            pt = self.project_pixel_to_3d(cx, cy, z, intr)
-            size_x = max((x2 - x1) * z / intr.fx, self.args.min_box_size_m)
-            size_y = max((y2 - y1) * z / intr.fy, self.args.min_box_size_m)
-            size_z = max(float(np.percentile(zs, 90) - np.percentile(zs, 10)), self.args.min_box_depth_m)
+            pt = self.project_pixel_to_3d(cx, cy, z_med, intr)
+
+            size_x = max((x2 - x1) * z_med / intr.fx, self.args.min_box_size_m)
+            size_y = max((y2 - y1) * z_med / intr.fy, self.args.min_box_size_m)
+
+            z_p10 = float(np.percentile(zs, 10))
+            z_p90 = float(np.percentile(zs, 90))
+            raw_size_z = z_p90 - z_p10
+            size_z = float(np.clip(
+                raw_size_z,
+                self.args.min_box_depth_m,
+                max_box_depth_thickness_m,
+            ))
+
             return {
                 "valid": True,
                 "frame": self.args.planner_frame,
                 "center": {"x": pt[0], "y": pt[1], "z": pt[2]},
                 "size": {"x": float(size_x), "y": float(size_y), "z": float(size_z)},
-                "min": {"x": float(pt[0] - size_x / 2), "y": float(pt[1] - size_y / 2), "z": float(pt[2] - size_z / 2)},
-                "max": {"x": float(pt[0] + size_x / 2), "y": float(pt[1] + size_y / 2), "z": float(pt[2] + size_z / 2)},
+                "min": {
+                    "x": float(pt[0] - size_x / 2),
+                    "y": float(pt[1] - size_y / 2),
+                    "z": float(pt[2] - size_z / 2),
+                },
+                "max": {
+                    "x": float(pt[0] + size_x / 2),
+                    "y": float(pt[1] + size_y / 2),
+                    "z": float(pt[2] + size_z / 2),
+                },
                 "depth_stats": self.depth_stats(zs),
-                "method": "2d_bbox_center_depth",
+                "method": "2d_bbox_center_depth_robust_cluster",
             }
-
-        sample_limit = self.args.max_points_per_object
-        if zs.shape[0] > sample_limit:
-            idx = np.random.choice(zs.shape[0], sample_limit, replace=False)
-            xs = xs[idx]
-            ys = ys[idx]
-            zs = zs[idx]
 
         u = xs.astype(np.float32) + x1
         v = ys.astype(np.float32) + y1
@@ -402,7 +514,7 @@ class SceneUnderstandingNode(Node):
         Z = zs.astype(np.float32)
         pts = np.stack([X, Y, Z], axis=1)
 
-        if self.args.use_depth_percentile_crop:
+        if self.args.use_depth_percentile_crop and pts.shape[0] > 0:
             z_lo = np.percentile(Z, self.args.depth_crop_percentile_low)
             z_hi = np.percentile(Z, self.args.depth_crop_percentile_high)
             keep = (Z >= z_lo) & (Z <= z_hi)
@@ -413,18 +525,40 @@ class SceneUnderstandingNode(Node):
 
         pmin = np.percentile(pts, self.args.xyz_percentile_low, axis=0)
         pmax = np.percentile(pts, self.args.xyz_percentile_high, axis=0)
+
         center = (pmin + pmax) / 2.0
-        size = np.maximum(pmax - pmin, np.array([self.args.min_box_size_m, self.args.min_box_size_m, self.args.min_box_depth_m], dtype=np.float32))
+        size = np.maximum(
+            pmax - pmin,
+            np.array(
+                [
+                    self.args.min_box_size_m,
+                    self.args.min_box_size_m,
+                    self.args.min_box_depth_m,
+                ],
+                dtype=np.float32,
+            ),
+        )
+
+        size[2] = float(np.clip(size[2], self.args.min_box_depth_m, max_box_depth_thickness_m))
+        center[2] = float(np.median(Z))
 
         return {
             "valid": True,
             "frame": self.args.planner_frame,
             "center": {"x": float(center[0]), "y": float(center[1]), "z": float(center[2])},
             "size": {"x": float(size[0]), "y": float(size[1]), "z": float(size[2])},
-            "min": {"x": float(center[0] - size[0] / 2), "y": float(center[1] - size[1] / 2), "z": float(center[2] - size[2] / 2)},
-            "max": {"x": float(center[0] + size[0] / 2), "y": float(center[1] + size[1] / 2), "z": float(center[2] + size[2] / 2)},
+            "min": {
+                "x": float(center[0] - size[0] / 2),
+                "y": float(center[1] - size[1] / 2),
+                "z": float(center[2] - size[2] / 2),
+            },
+            "max": {
+                "x": float(center[0] + size[0] / 2),
+                "y": float(center[1] + size[1] / 2),
+                "z": float(center[2] + size[2] / 2),
+            },
             "depth_stats": self.depth_stats(Z),
-            "method": "2d_bbox_depth_roi",
+            "method": "2d_bbox_depth_roi_robust_cluster",
         }
 
     def project_pixel_to_3d(self, u: float, v: float, z: float, intr: CameraIntrinsics):
@@ -466,6 +600,57 @@ class SceneUnderstandingNode(Node):
             "pred_label": self.idx2sit[pred_idx],
             "probs": {self.idx2sit[i]: float(probs[i]) for i in range(len(probs))},
         }
+        
+    def estimate_rough_depth(
+        self,
+        depth_m: np.ndarray,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+    ) -> float | None:
+        h, w = depth_m.shape[:2]
+        x1 = int(np.clip(x1, 0, w - 1))
+        x2 = int(np.clip(x2, 0, w - 1))
+        y1 = int(np.clip(y1, 0, h - 1))
+        y2 = int(np.clip(y2, 0, h - 1))
+        if x2 <= x1 or y2 <= y1:
+            return None
+
+        roi = depth_m[y1:y2, x1:x2]
+        if roi.size == 0:
+            return None
+
+        rh, rw = roi.shape[:2]
+        cr = self.args.rough_depth_center_ratio
+        ch = max(1, int(rh * cr))
+        cw = max(1, int(rw * cr))
+        cy1 = max(0, (rh - ch) // 2)
+        cx1 = max(0, (rw - cw) // 2)
+        cy2 = min(rh, cy1 + ch)
+        cx2 = min(rw, cx1 + cw)
+
+        center_roi = roi[cy1:cy2, cx1:cx2]
+        valid = (
+            np.isfinite(center_roi)
+            & (center_roi > self.args.min_depth_m)
+            & (center_roi < self.args.max_depth_m)
+        )
+        if not np.any(valid):
+            return None
+
+        return float(np.median(center_roi[valid]))
+    
+    def get_overlap_rect(self, a, b):
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+        ix1 = max(ax1, bx1)
+        iy1 = max(ay1, by1)
+        ix2 = min(ax2, bx2)
+        iy2 = min(ay2, by2)
+        if ix2 <= ix1 or iy2 <= iy1:
+            return None
+        return (ix1, iy1, ix2, iy2)
 
     def build_scene_context_msg(
         self,
@@ -644,7 +829,7 @@ def build_argparser():
     p.add_argument("--planner-frame", type=str, default="camera_color_optical_frame")
     p.add_argument("--depth-scale", type=float, default=0.001)
     p.add_argument("--min-depth-m", type=float, default=0.15)
-    p.add_argument("--max-depth-m", type=float, default=3.0)
+    p.add_argument("--max-depth-m", type=float, default=1.0)
     p.add_argument("--max-points-per-object", type=int, default=1500)
     p.add_argument("--depth-bbox-mode", type=str, default="roi", choices=["roi", "center"])
     p.add_argument("--use-depth-percentile-crop", action="store_true")
@@ -656,6 +841,17 @@ def build_argparser():
     p.add_argument("--min-box-depth-m", type=float, default=0.03)
     p.add_argument("--max-publish-hz", type=float, default=15.0)
     p.add_argument("--situation-thres", type=float, default=0.80)
+    
+    p.add_argument("--front-depth-margin-m", type=float, default=0.05)
+    p.add_argument("--depth-order-margin-m", type=float, default=0.03)
+    p.add_argument("--rough-depth-center-ratio", type=float, default=0.4)
+    p.add_argument("--min-valid-depth-pixels", type=int, default=30)
+    
+    p.add_argument("--z-mad-scale", type=float, default=2.5)
+    p.add_argument("--min-z-band-m", type=float, default=0.03)
+    p.add_argument("--max-z-band-m", type=float, default=0.20)
+    p.add_argument("--max-box-depth-thickness-m", type=float, default=0.25)
+    
     return p
 
 
