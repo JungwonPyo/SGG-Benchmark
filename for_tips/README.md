@@ -154,7 +154,7 @@ env -u LD_LIBRARY_PATH ROS_LOG_DIR="$HOME/.ros/log" LD_LIBRARY_PATH=/opt/ros/hum
 uv run python for_tips/tools/ros2_scene_understanding_node.py \
   --sgg-config checkpoints/CUSTOM/react_pp_yolo12m/config.yml \
   --sgg-weights checkpoints/CUSTOM/react_pp_yolo12m/model.onnx \
-  --gnn-checkpoint for_tips/situation_gnn/runs/situation_multic lass/best_model.pt \
+  --gnn-checkpoint for_tips/situation_gnn/runs/situation_multiclass/best_model.pt \
   --rgb-topic /camera/color/image_raw \
   --depth-topic /camera/depth/image_raw \
   --camera-info-topic /camera/color/camera_info \
